@@ -18,7 +18,7 @@ public:
     bool open(const std::string &url) override;
     bool isOpened() const override;
     bool grab() override;
-    bool retrieve(cv::Mat &frame) override;
+    bool retrieve(cv::Mat &frame, bool need_data = true) override;
     void release() override;
 
 private:

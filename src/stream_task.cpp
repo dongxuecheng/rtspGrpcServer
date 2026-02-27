@@ -126,12 +126,16 @@ void StreamTask::readLoop()
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_decode_time).count();
             if (elapsed < decode_interval_ms_)
+            {
+                cv::Mat dummy;
+                decoder_->retrieve(dummy, false); // 继续丢弃帧，但不处理数据，保持解码器状态更新
                 continue;
+            }
             last_decode_time = now;
         }
 
         cv::Mat frame;
-        if (decoder_->retrieve(frame) && !frame.empty())
+        if (decoder_->retrieve(frame, true) && !frame.empty())
         {
             if (startup_drop_count < DROP_FRAMES_ON_START)
             {

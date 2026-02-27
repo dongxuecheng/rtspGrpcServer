@@ -126,7 +126,7 @@ bool CudaDecoder::grab()
     return true;
 }
 
-bool CudaDecoder::retrieve(cv::Mat &frame)
+bool CudaDecoder::retrieve(cv::Mat &frame, bool need_data)
 {
     if (!isOpened() || decoded_frames_available_ <= 0)
         return false;
@@ -134,6 +134,13 @@ bool CudaDecoder::retrieve(cv::Mat &frame)
     void *ptr = decoder_->get_frame(&last_pts_, &last_frame_index_);
     if (!ptr)
         return false;
+
+    if (need_data && frames_to_skip_ > 0)
+    {
+        frames_to_skip_--;
+        decoded_frames_available_--;
+        return false; // 返回 false，让外部主循环继续 grab 下一帧
+    }
 
     // 逻辑：如果是需要丢弃的帧，则跳过并直接递减计数
     if (frames_to_skip_ > 0)

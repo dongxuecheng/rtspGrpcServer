@@ -2,12 +2,13 @@
 #include "interfaces.h"
 #include <opencv2/opencv.hpp>
 
-class OpencvDecoder : public IVideoDecoder {
+class OpencvDecoder : public IVideoDecoder
+{
 public:
-    bool open(const std::string& url) override;
+    bool open(const std::string &url) override;
     bool isOpened() const override;
     bool grab() override;
-    bool retrieve(cv::Mat& frame) override;
+    bool retrieve(cv::Mat &frame, bool need_data = true) override;
     void release() override;
 
 private:

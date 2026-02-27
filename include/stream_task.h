@@ -7,24 +7,25 @@
 #include <opencv2/opencv.hpp>
 #include "interfaces.h"
 
-class StreamTask {
+class StreamTask
+{
 public:
     // 修改构造函数：增加 encoder 参数
-    StreamTask(const std::string& url, 
-               int heartbeat_timeout_ms, 
+    StreamTask(const std::string &url,
+               int heartbeat_timeout_ms,
                int decode_interval_ms,
                std::unique_ptr<IVideoDecoder> decoder,
                std::shared_ptr<IImageEncoder> encoder); // 【新增】
     ~StreamTask();
 
     void stop();
-    
+
     // 返回 true 表示获取成功，out_buffer 中填入数据
-    bool getLatestEncodedFrame(std::string& out_buffer);
+    bool getLatestEncodedFrame(std::string &out_buffer);
 
     bool isConnected();
     bool isTimeout();
-    
+
     std::string getUrl() const { return url_; }
     void keepAlive();
 
@@ -41,7 +42,8 @@ private:
 
     // 【修改】缓存的是编码后的字节流，而不是原始 Mat
     std::string latest_encoded_frame_;
-    
+    cv::Mat latest_frame_; // 可选：如果需要保留原始帧数据
+
     std::mutex frame_mutex_;
     std::atomic<bool> running_;
     std::atomic<bool> connected_;
