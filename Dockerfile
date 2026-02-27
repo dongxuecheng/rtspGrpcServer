@@ -1,66 +1,36 @@
-# ==========================================
-# 第一阶段：编译环境 (Builder)
-# ==========================================
-FROM ubuntu:22.04 AS builder
+# 使用 NVIDIA 运行环境镜像，支持 GPU 加速
+FROM nvcr.io/nvidia/cuda:12.6.3-runtime-ubuntu22.04
 
-# 设置非交互模式，防止 apt-get 安装时卡在时区选择
+# 1. 设置非交互环境，更新镜像源
 ENV DEBIAN_FRONTEND=noninteractive
-
-# 【新增】替换为阿里云镜像源 (加速下载)
-# 替换 archive.ubuntu.com 和 security.ubuntu.com 为 mirrors.aliyun.com
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装编译所需的依赖链：GCC, CMake, OpenCV, gRPC, Protobuf
-RUN apt-get update -y && apt-get install -y \
-    build-essential \
-    cmake \
-    pkg-config \
-    libopencv-dev \
-    libgrpc++-dev \
-    protobuf-compiler-grpc \
-    protobuf-compiler \
-    libprotobuf-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 设置工作目录
-WORKDIR /app
-
-# 拷贝当前目录的所有源码到容器内
-COPY . /app
-
-# 执行 CMake 构建
-RUN mkdir build && cd build && \
-    cmake .. && \
-    make -j$(nproc)
-
-# ==========================================
-# 第二阶段：运行环境 (Runtime)
-# ==========================================
-FROM ubuntu:22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# 【新增】替换为阿里云镜像源 (加速下载)
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
-
-# 安装运行所需的动态链接库 (OpenCV 和 gRPC)
-# 注意：这里安装 -dev 包是为了确保所有的 .so 软链接都完整存在，体积增加可接受
+# 2. 安装程序运行必须的动态链接库
+# 注意：你需要安装程序实际依赖的运行库（.so）
 RUN apt-get update && apt-get install -y \
     libopencv-dev \
     libgrpc++-dev \
     libprotobuf-dev \
+    libspdlog-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
+# 3. 配置 nvcuvid 软链接 (确保运行时能找到驱动库)
+RUN ln -s /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 /usr/lib/x86_64-linux-gnu/libnvcuvid.so
+
+# 4. 拷贝你的编译好的二进制文件
 WORKDIR /app
+COPY build/rtsp_server /app/rtsp_server
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-# 从 builder 阶段把编译好的二进制可执行文件拷贝过来
-COPY --from=builder /app/build/rtsp_server /app/rtsp_server
 
-# 暴露 gRPC 默认监听的 50051 端口
+# 暴露端口
 EXPOSE 50051
 
-# 启动服务端
-CMD ["./rtsp_server"]
+# 启动服务
+ENTRYPOINT ["/app/entrypoint.sh"]

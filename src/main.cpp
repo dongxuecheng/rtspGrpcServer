@@ -1,11 +1,37 @@
 #include <iostream>
 #include <memory>
+#include <filesystem> // for log directory creation
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include "rtsp_service.h"
 
-int main() {
+// spdlog headers
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
+
+int main()
+{
+    grpc::reflection::InitProtoReflectionServerBuilderPlugin();
     std::string server_address("0.0.0.0:50051");
     RTSPServiceImpl service;
+
+    // create logs directory if needed
+    try
+    {
+        std::filesystem::create_directories("logs");
+    }
+    catch (const std::exception &e)
+    {
+        // failure to create directory is non-fatal, just log
+        spdlog::warn("Could not create logs directory: {}", e.what());
+    }
+
+    // initialize basic file logger (thread-safe)
+    auto file_logger = spdlog::basic_logger_mt("rtsp_logger", "logs/server.log");
+    file_logger->flush_on(spdlog::level::info);
+    spdlog::set_default_logger(file_logger);
+    spdlog::set_level(spdlog::level::info); // change as needed
+    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
 
     grpc::ServerBuilder builder;
     builder.SetMaxReceiveMessageSize(10 * 1024 * 1024);
@@ -14,7 +40,7 @@ int main() {
     builder.RegisterService(&service);
 
     std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-    std::cout << ">>> 🚀 C++ RTSP gRPC Server Listening on " << server_address << " <<<\n";
+    spdlog::info(">>> 🚀 C++ RTSP gRPC Server Listening on {} <<<", server_address);
     server->Wait();
 
     return 0;

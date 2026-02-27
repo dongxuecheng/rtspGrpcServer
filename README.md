@@ -52,7 +52,7 @@ docker build -t rtsp-grpc-server .
 ```
 Run the container:
 ```bash
-docker run --rm -p 50051:50051 rtsp-grpc-server
+docker run -itd --gpus all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video --name cuda_stream -p 50051:50051 grpc_stream
 ```
 
 ---
@@ -87,3 +87,9 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. stream_servic
 ## 📌 Protobuf Definition
 
 `stream_service.proto` defines the gRPC service and messages used by server and client. Make sure to keep both copies in sync.
+
+
+## GRPC UI
+```bash
+.\grpcui.exe -plaintext 172.16.20.193:50051
+```

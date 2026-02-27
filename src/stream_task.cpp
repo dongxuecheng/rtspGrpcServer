@@ -1,6 +1,8 @@
 #include "stream_task.h"
 #include <chrono>
 
+#include <spdlog/spdlog.h>
+
 StreamTask::StreamTask(const std::string &url,
                        int heartbeat_timeout_ms,
                        int decode_interval_ms,
@@ -32,6 +34,7 @@ void StreamTask::stop()
             worker_thread_.join();
         if (decoder_ && decoder_->isOpened())
             decoder_->release();
+        spdlog::info("StreamTask stopped for URL: {}", url_);
     }
 }
 
@@ -81,6 +84,7 @@ bool StreamTask::isTimeout()
 
 void StreamTask::readLoop()
 {
+    spdlog::info("StreamTask starting for URL: {}", url_);
     decoder_->open(url_);
     auto last_decode_time = std::chrono::steady_clock::now();
 
@@ -92,6 +96,10 @@ void StreamTask::readLoop()
     {
         if (!decoder_->isOpened())
         {
+            if (connected_)
+            {
+                spdlog::warn("Decoder lost connection for URL: {}", url_);
+            }
             connected_ = false;
             std::this_thread::sleep_for(std::chrono::seconds(1));
             decoder_->open(url_);
@@ -102,6 +110,10 @@ void StreamTask::readLoop()
 
         if (!decoder_->grab())
         {
+            if (connected_)
+            {
+                spdlog::warn("Frame grab failed for URL: {}", url_);
+            }
             connected_ = false;
             decoder_->release();
             continue;

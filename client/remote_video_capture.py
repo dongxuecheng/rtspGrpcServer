@@ -11,19 +11,24 @@ import stream_service_pb2_grpc
 # 配置简单的日志输出
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+DECODER_CPU_OPENCV = stream_service_pb2.DECODER_CPU_OPENCV
+DECODER_GPU_CUDA = stream_service_pb2.DECODER_GPU_CUDA
+
 class RemoteVideoCapture:
-    """
-    gRPC 远程视频流拉取客户端，API 设计参考 cv2.VideoCapture
-    """
     def __init__(self, 
                  rtsp_url: str, 
                  server_address: str = '127.0.0.1:50051',
                  heartbeat_timeout_ms: int = 10000,
-                 decode_interval_ms: int = 0):
+                 decode_interval_ms: int = 0,
+                 # 新增：允许指定解码器类型，默认 CPU
+                 decoder_type: int = None):
         self.rtsp_url = rtsp_url
         self.server_address = server_address
         self.heartbeat_timeout_ms = heartbeat_timeout_ms
         self.decode_interval_ms = decode_interval_ms
+        
+        # 使用传入的类型，如果未指定则默认使用 OpenCV CPU
+        self.decoder_type = decoder_type if decoder_type is not None else stream_service_pb2.DECODER_CPU_OPENCV
         
         self.channel = None
         self.stub = None
