@@ -59,7 +59,7 @@ docker run --rm -p 50051:50051 rtsp-grpc-server
 
 ## 📡 Running the Server
 
-Start the server either from a build or via Docker. It listens on port `50051`
+Start the server either from a build or via Docker. It listens on port `50051` by default.
 
 ### Command-line options
 ```text
