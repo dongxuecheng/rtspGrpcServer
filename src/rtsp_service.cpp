@@ -1,6 +1,7 @@
 #include "rtsp_service.h"
 #include "decoder_factory.h"
 #include "opencv_encoder.h"
+#include "nvjpeg_encoder.h"
 #include "utils.h"
 
 #include <spdlog/spdlog.h>
@@ -74,8 +75,19 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         return grpc::Status::OK;
     }
 
-    // 3. 创建编码器 (Encoder) - 统一使用 OpenCV 编码器
-    auto encoder = std::make_shared<OpencvEncoder>(85);
+    // 3. 创建编码器 (Encoder)
+    // GPU 解码时使用 NVJPEG GPU 编码器，CPU 解码时使用 OpenCV
+    std::shared_ptr<IImageEncoder> encoder;
+    if (decoder_type == streamingservice::DECODER_GPU_CUDA)
+    {
+        encoder = std::make_shared<NvjpegEncoder>(85);
+        spdlog::info("Using NVJPEG GPU encoder");
+    }
+    else
+    {
+        encoder = std::make_shared<OpencvEncoder>(85);
+        spdlog::info("Using OpenCV CPU encoder");
+    }
 
     // 4. 创建流任务 (StreamTask)
     // 将解码器和编码器都注入到任务中
@@ -186,6 +198,100 @@ grpc::Status RTSPServiceImpl::GetLatestFrame(grpc::ServerContext *context, const
         response->set_success(false);
         response->set_message("No frame available yet or stream disconnected");
     }
+    return grpc::Status::OK;
+}
+
+// =============================================================
+// StreamFrames：流式传输视频帧
+// =============================================================
+grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context, 
+                                            const streamingservice::StreamRequest *request, 
+                                            grpc::ServerWriter<streamingservice::FrameResponse>* writer)
+{
+    std::string stream_id = request->stream_id();
+    int max_fps = request->max_fps();
+    
+    std::shared_ptr<StreamTask> task;
+    {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        auto it = streams_.find(stream_id);
+        if (it != streams_.end())
+        {
+            task = it->second;
+        }
+    }
+
+    if (!task)
+    {
+        streamingservice::FrameResponse response;
+        response.set_success(false);
+        response.set_message("Stream ID not found");
+        writer->Write(response);
+        return grpc::Status::OK;
+    }
+
+    // 计算帧间隔（微秒）
+    int64_t frame_interval_us = 0;
+    if (max_fps > 0)
+    {
+        frame_interval_us = 1000000LL / max_fps;
+    }
+
+    auto last_send_time = std::chrono::steady_clock::now();
+    std::string last_frame_data;
+
+    spdlog::info("[STREAM] Client connected to stream: {}, max_fps: {}", stream_id, max_fps);
+
+    // 持续发送帧，直到客户端断开
+    while (!context->IsCancelled())
+    {
+        // 帧率控制
+        if (frame_interval_us > 0)
+        {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_send_time).count();
+            if (elapsed_us < frame_interval_us)
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(frame_interval_us - elapsed_us));
+            }
+            last_send_time = std::chrono::steady_clock::now();
+        }
+
+        // 获取最新帧
+        std::string encoded_frame;
+        if (task->getLatestEncodedFrame(encoded_frame))
+        {
+            // 避免发送重复帧
+            if (encoded_frame != last_frame_data)
+            {
+                streamingservice::FrameResponse response;
+                response.set_success(true);
+                response.set_image_data(encoded_frame);
+                response.set_message("OK");
+
+                if (!writer->Write(response))
+                {
+                    // 客户端断开
+                    break;
+                }
+
+                last_frame_data = std::move(encoded_frame);
+                task->keepAlive();
+            }
+            else
+            {
+                // 没有新帧，短暂休眠
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        else
+        {
+            // 流未连接或无数据
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    spdlog::info("[STREAM] Client disconnected from stream: {}", stream_id);
     return grpc::Status::OK;
 }
 

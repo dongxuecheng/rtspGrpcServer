@@ -144,16 +144,42 @@ void StreamTask::readLoop()
 
         if (should_encode)
         {
-            // 获取帧并编码
-            cv::Mat frame;
-            if (decoder_->retrieve(frame, true) && !frame.empty())
+            std::string temp_encoded_buffer;
+            bool encode_ok = false;
+            
+            // GPU 解码 + GPU 编码：零拷贝路径
+            if (decoder_->isGpuFrame() && encoder_->supportsGpuEncode())
             {
-                std::string temp_encoded_buffer;
-                if (encoder_->encode(frame, temp_encoded_buffer))
+                // 触发解码器更新状态（不需要实际数据）
+                cv::Mat dummy;
+                if (decoder_->retrieve(dummy, true))
                 {
-                    std::lock_guard<std::mutex> lock(frame_mutex_);
-                    latest_encoded_frame_ = std::move(temp_encoded_buffer);
+                    uint8_t* gpu_ptr = decoder_->getGpuFramePtr();
+                    if (gpu_ptr)
+                    {
+                        encode_ok = encoder_->encodeGpu(
+                            gpu_ptr, 
+                            decoder_->getWidth(), 
+                            decoder_->getHeight(), 
+                            temp_encoded_buffer
+                        );
+                    }
                 }
+            }
+            else
+            {
+                // CPU 路径：需要拷贝数据
+                cv::Mat frame;
+                if (decoder_->retrieve(frame, true) && !frame.empty())
+                {
+                    encode_ok = encoder_->encode(frame, temp_encoded_buffer);
+                }
+            }
+            
+            if (encode_ok)
+            {
+                std::lock_guard<std::mutex> lock(frame_mutex_);
+                latest_encoded_frame_ = std::move(temp_encoded_buffer);
             }
         }
     }

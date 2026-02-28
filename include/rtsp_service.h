@@ -17,6 +17,7 @@ public:
     grpc::Status StartStream(grpc::ServerContext* context, const streamingservice::StartRequest* request, streamingservice::StartResponse* response) override;
     grpc::Status StopStream(grpc::ServerContext* context, const streamingservice::StopRequest* request, streamingservice::StopResponse* response) override;
     grpc::Status GetLatestFrame(grpc::ServerContext* context, const streamingservice::FrameRequest* request, streamingservice::FrameResponse* response) override;
+    grpc::Status StreamFrames(grpc::ServerContext* context, const streamingservice::StreamRequest* request, grpc::ServerWriter<streamingservice::FrameResponse>* writer) override;
     grpc::Status CheckStream(grpc::ServerContext* context, const streamingservice::CheckRequest* request, streamingservice::CheckResponse* response) override;
 
 private:

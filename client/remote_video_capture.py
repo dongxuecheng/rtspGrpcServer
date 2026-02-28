@@ -137,6 +137,32 @@ class RemoteVideoCapture:
             logging.error(f"读取画面异常: {e.details()}")
             return False, None
 
+    def stream_frames(self, max_fps=0):
+        """
+        流式获取视频帧（生成器）
+        :param max_fps: 最大帧率，0 表示不限制
+        :yield: (ret, frame) ret 为 bool，frame 为 numpy array (BGR格式)
+        """
+        if not self.stream_id or not self.stub:
+            logging.error("流未连接")
+            return
+
+        req = stream_service_pb2.StreamRequest(stream_id=self.stream_id, max_fps=max_fps)
+        try:
+            for resp in self.stub.StreamFrames(req):
+                if resp.success and resp.image_data:
+                    img_array = np.frombuffer(resp.image_data, dtype=np.uint8)
+                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    if img is not None:
+                        yield True, img
+                    else:
+                        yield False, None
+                else:
+                    yield False, None
+        except grpc.RpcError as e:
+            logging.error(f"流式读取异常: {e.details()}")
+            return
+
     def release(self):
         """释放资源，通知服务端关闭流"""
         if self.stream_id and self.stub:

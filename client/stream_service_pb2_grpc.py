@@ -49,6 +49,11 @@ class RTSPStreamServiceStub(object):
                 request_serializer=stream__service__pb2.FrameRequest.SerializeToString,
                 response_deserializer=stream__service__pb2.FrameResponse.FromString,
                 _registered_method=True)
+        self.StreamFrames = channel.unary_stream(
+                '/streamingservice.RTSPStreamService/StreamFrames',
+                request_serializer=stream__service__pb2.StreamRequest.SerializeToString,
+                response_deserializer=stream__service__pb2.FrameResponse.FromString,
+                _registered_method=True)
         self.CheckStream = channel.unary_unary(
                 '/streamingservice.RTSPStreamService/CheckStream',
                 request_serializer=stream__service__pb2.CheckRequest.SerializeToString,
@@ -77,6 +82,13 @@ class RTSPStreamServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def StreamFrames(self, request, context):
+        """流式传输
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def CheckStream(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -99,6 +111,11 @@ def add_RTSPStreamServiceServicer_to_server(servicer, server):
             'GetLatestFrame': grpc.unary_unary_rpc_method_handler(
                     servicer.GetLatestFrame,
                     request_deserializer=stream__service__pb2.FrameRequest.FromString,
+                    response_serializer=stream__service__pb2.FrameResponse.SerializeToString,
+            ),
+            'StreamFrames': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamFrames,
+                    request_deserializer=stream__service__pb2.StreamRequest.FromString,
                     response_serializer=stream__service__pb2.FrameResponse.SerializeToString,
             ),
             'CheckStream': grpc.unary_unary_rpc_method_handler(
@@ -187,6 +204,33 @@ class RTSPStreamService(object):
             target,
             '/streamingservice.RTSPStreamService/GetLatestFrame',
             stream__service__pb2.FrameRequest.SerializeToString,
+            stream__service__pb2.FrameResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StreamFrames(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/streamingservice.RTSPStreamService/StreamFrames',
+            stream__service__pb2.StreamRequest.SerializeToString,
             stream__service__pb2.FrameResponse.FromString,
             options,
             channel_credentials,

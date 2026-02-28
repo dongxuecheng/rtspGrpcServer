@@ -18,7 +18,7 @@ if __name__ == '__main__':
             if ret:
                 # 成功取到画面
                 filename = f"capture_{index}.jpg"
-                # cv2.imwrite(filename, frame)
+                cv2.imwrite(filename, frame)
                 print(f"已保存: {filename}")
             else:
                 print("未取到画面")
