@@ -44,7 +44,7 @@ void initCudaDevice()
 int main()
 {
     // 初始化 CUDA 设备，设置同步模式减少 CPU 占用
-    initCudaDevice();
+    // initCudaDevice();
 
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
     std::string server_address("0.0.0.0:50051");

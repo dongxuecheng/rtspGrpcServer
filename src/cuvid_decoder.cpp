@@ -468,7 +468,11 @@ namespace FFHDDecoder
 
         int get_frame_bytes() override
         {
-            assert(m_nWidth);
+            // 防御编程：视频格式尚未解析时返回0
+            if (m_nWidth == 0 || m_nLumaHeight == 0)
+            {
+                return 0;
+            }
             if (m_output_bgr)
             {
                 return m_nWidth * m_nLumaHeight * 3;
@@ -478,13 +482,13 @@ namespace FFHDDecoder
 
         int get_width() override
         {
-            assert(m_nWidth);
+            // 防御编程：视频格式尚未解析时返回0
             return m_nWidth;
         }
 
         int get_height() override
         {
-            assert(m_nLumaHeight);
+            // 防御编程：视频格式尚未解析时返回0
             return m_nLumaHeight;
         }
 

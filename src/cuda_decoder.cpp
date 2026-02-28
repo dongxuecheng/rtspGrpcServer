@@ -160,6 +160,15 @@ bool CudaDecoder::retrieve(cv::Mat &frame, bool need_data)
         int height = decoder_->get_height();
         int frame_bytes = decoder_->get_frame_bytes();
         
+        // 防御编程：视频格式尚未解析时跳过
+        if (width == 0 || height == 0 || frame_bytes == 0)
+        {
+            spdlog::warn("Video format not yet parsed, width={}, height={}, frame_bytes={}", 
+                         width, height, frame_bytes);
+            decoded_frames_available_--;
+            return false;
+        }
+        
         // 调试信息
         // spdlog::info("Frame info: {}x{}, frame_bytes={}, expected_bgr_bytes={}", 
         //              width, height, frame_bytes, width * height * 3);
