@@ -3,7 +3,7 @@
 #include "cuda_decoder.h"
 #include <iostream>
 
-std::unique_ptr<IVideoDecoder> DecoderFactory::create(streamingservice::DecoderType type)
+std::unique_ptr<IVideoDecoder> DecoderFactory::create(streamingservice::DecoderType type, int gpu_id)
 {
     switch (type)
     {
@@ -11,7 +11,7 @@ std::unique_ptr<IVideoDecoder> DecoderFactory::create(streamingservice::DecoderT
         return std::make_unique<OpencvDecoder>();
 
     case streamingservice::DECODER_GPU_CUDA:
-        return std::make_unique<CudaDecoder>();
+        return std::make_unique<CudaDecoder>(gpu_id);
 
     case streamingservice::DECODER_FFMPEG_NATIVE:
         // TODO: 未来实现 FFmpegDecoder 并在这里返回

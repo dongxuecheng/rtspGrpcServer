@@ -32,8 +32,8 @@ bool CudaDecoder::open(const std::string &url)
             decoder_ = FFHDDecoder::create_cuvid_decoder(
                 true,   // bUseDeviceFrame = true
                 FFHDDecoder::ffmpeg2NvCodecId(demuxer_->get_video_codec()),
-                -1,
-                0,
+                -1,     // max_cache
+                gpu_id_, // gpu_id
                 nullptr,
                 nullptr,
                 true);  // output_bgr = true

@@ -64,8 +64,9 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
 
     // 2. 创建解码器 (Decoder)
     auto decoder_type = request->decoder_type();
-    spdlog::info("Decoder type: {}", decoder_type);
-    auto decoder = DecoderFactory::create(decoder_type);
+    int gpu_id = request->gpu_id();  // 默认为 0
+    spdlog::info("Decoder type: {}, GPU ID: {}", decoder_type, gpu_id);
+    auto decoder = DecoderFactory::create(decoder_type, gpu_id);
     if (!decoder)
     {
         response->set_success(false);

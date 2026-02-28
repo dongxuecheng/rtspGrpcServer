@@ -20,11 +20,13 @@ class RemoteVideoCapture:
                  server_address: str = '127.0.0.1:50052',
                  heartbeat_timeout_ms: int = 10000,
                  decode_interval_ms: int = 0,
-                 decoder_type: int = None):
+                 decoder_type: int = None,
+                 gpu_id: int = 0):
         self.rtsp_url = rtsp_url
         self.server_address = server_address
         self.heartbeat_timeout_ms = heartbeat_timeout_ms
         self.decode_interval_ms = decode_interval_ms
+        self.gpu_id = gpu_id
         
         # 使用传入的类型，如果未指定则默认使用 OpenCV CPU
         self.decoder_type = decoder_type if decoder_type is not None else stream_service_pb2.DECODER_CPU_OPENCV
@@ -48,7 +50,8 @@ class RemoteVideoCapture:
                 rtsp_url=self.rtsp_url,
                 heartbeat_timeout_ms=self.heartbeat_timeout_ms,
                 decode_interval_ms=self.decode_interval_ms,
-                decoder_type=self.decoder_type
+                decoder_type=self.decoder_type,
+                gpu_id=self.gpu_id
             )
             # 增加超时限制，防止卡死
             resp = self.stub.StartStream(req, timeout=5) 

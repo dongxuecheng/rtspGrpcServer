@@ -12,7 +12,7 @@
 class CudaDecoder : public IVideoDecoder
 {
 public:
-    CudaDecoder() = default;
+    CudaDecoder(int gpu_id = 0) : gpu_id_(gpu_id) {}
     virtual ~CudaDecoder() { release(); }
 
     bool open(const std::string &url) override;
@@ -26,11 +26,15 @@ public:
     uint8_t* getGpuFramePtr() override { return last_gpu_frame_ptr_; }
     int getWidth() const override;
     int getHeight() const override;
+    
+    // GPU ID
+    int getGpuId() const { return gpu_id_; }
 
 private:
     std::shared_ptr<FFHDDemuxer::FFmpegDemuxer> demuxer_;
     std::shared_ptr<FFHDDecoder::CUVIDDecoder> decoder_;
 
+    int gpu_id_ = 0;              // GPU ID
     bool is_opened_ = false;
     int64_t last_pts_ = 0;
     unsigned int last_frame_index_ = 0;
