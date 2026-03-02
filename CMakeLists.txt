@@ -102,6 +102,7 @@ set(SRC_FILES
     src/opencv_encoder.cpp
     src/nvjpeg_encoder.cpp   # GPU JPEG 编码器
     src/opencv_decoder.cpp
+    src/ffmpeg_decoder.cpp   # FFmpeg 原生软解码器
     src/ffmpeg_demuxer.cpp
     src/cuda_tools.cpp
     src/cuvid_decoder.cpp

@@ -1,11 +1,11 @@
 from remote_video_capture import RemoteVideoCapture
-from stream_service_pb2 import DECODER_CPU_OPENCV, DECODER_GPU_CUDA
+from stream_service_pb2 import DECODER_CPU_OPENCV, DECODER_GPU_CUDA,DECODER_FFMPEG_NATIVE
 import time
 import cv2
 
 if __name__ == '__main__':
     url = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/801"
-    with RemoteVideoCapture(url, decode_interval_ms=1000, decoder_type=1, gpu_id=0) as cap:
+    with RemoteVideoCapture(url, decode_interval_ms=1000, decoder_type=DECODER_FFMPEG_NATIVE, gpu_id=0) as cap:
         while not cap.is_connected():
             print("摄像头暂时未连接成功，后台正尝试重连...")
             time.sleep(2)

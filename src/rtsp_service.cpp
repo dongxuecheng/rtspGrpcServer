@@ -66,7 +66,9 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
     // 2. 创建解码器 (Decoder)
     auto decoder_type = request->decoder_type();
     int gpu_id = request->gpu_id();  // 默认为 0
-    spdlog::info("Decoder type: {}, GPU ID: {}", decoder_type, gpu_id);
+    // 0 opencv 1 gpu 2 ffmpeg
+    std::string decode_type_str = (decoder_type == streamingservice::DECODER_CPU_OPENCV) ? "OpenCV" : (decoder_type == streamingservice::DECODER_GPU_CUDA) ? "GPU" : "FFmpeg";
+    spdlog::info("Decoder type: {}, GPU ID: {}", decode_type_str, gpu_id);
     auto decoder = DecoderFactory::create(decoder_type, gpu_id);
     if (!decoder)
     {
@@ -119,6 +121,8 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         }
         streams_[stream_id] = task;
     }
+    // 如果打开流失败
+
 
     response->set_success(true);
     response->set_stream_id(stream_id);
