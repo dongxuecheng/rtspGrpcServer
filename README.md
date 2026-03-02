@@ -164,8 +164,9 @@ message StartRequest {
 ### 解码器类型
 
 ```python
-DECODER_CPU_OPENCV = 0   # CPU OpenCV 软解
-DECODER_GPU_CUDA = 1     # NVIDIA CUDA 硬解
+DECODER_CPU_OPENCV = 0    # OpenCV 软解
+DECODER_GPU_CUDA = 1      # NVIDIA CUDA 硬解
+DECODER_FFMPEG_NATIVE = 2 # FFmpeg 软解
 ```
 
 ---
