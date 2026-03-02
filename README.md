@@ -1,133 +1,38 @@
 # RTSP gRPC 服务器
 
 本项目是一个 C++ 实现的 **RTSP 流媒体服务器**，通过 gRPC 接口向客户端提供视频流服务。
-项目包含服务端应用（`src/`）和 Python 客户端（`client/`），展示了如何与服务进行交互。
 
 ---
 
-
-## 🚀 特性
+## 特性
 
 - **GPU 硬件加速**：支持 NVIDIA CUDA 硬件解码和 NVJPEG 编码
-- **多解码器支持**：CPU (OpenCV) / GPU (CUDA) 可选
+- **多解码器支持**：CPU (OpenCV) / GPU (CUDA) / FFmpeg 可选
 - **流式传输**：gRPC 服务端流式推送，低延迟实时传输
 - **多客户端共享**：单路解码，多客户端零拷贝共享
 - **灵活帧率控制**：支持解码间隔和客户端独立帧率限制
-- **多 GPU 支持**：可指定 GPU ID
-- **模块化设计**：工厂模式解耦解码器/编码器
-- **Python SDK**：完整的客户端封装
+- **流状态管理**：连接中 / 已连接 / 无法连接 / 不存在
 
 ---
 
-## 🛠️ 依赖项
+## 依赖项
 
-- C++17 兼容编译器（如 `g++`/`clang`）
-- CMake 3.10+
-- [gRPC](https://grpc.io/) 和 Protobuf
-- OpenCV（推荐 4.x）
+- C++17、CMake 3.10+、gRPC、Protobuf、OpenCV 4.x
 - CUDA Toolkit（GPU 解码需要）
-- Python3 及 `grpcio`、`opencv-python`（客户端）
-
-### 安装依赖（Ubuntu/Debian 示例）
-```bash
-sudo apt update
-sudo apt install -y build-essential cmake libopencv-dev libgrpc++-dev protobuf-compiler
-pip install grpcio grpcio-tools opencv-python
-``` 
+- Python3、grpcio、opencv-python（客户端）
 
 ---
 
-## 🏗️ 编译服务端
+## 快速开始
 
+### 编译服务端
 ```bash
-mkdir -p build && cd build
-cmake ..
-make -j$(nproc)
-```
-
-编译后会在 `build/` 目录生成可执行文件 `rtsp_server`。
-
-### Docker 构建
-
-使用提供的 `Dockerfile` 构建镜像：
-```bash
-docker build -t grpc_stream .
-```
-
-运行容器：
-```bash
-docker run -itd --gpus all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
-  --name cuda_stream \
-  -p 50051:50051 \
-  grpc_stream
-```
-
----
-
-## 📡 运行服务端
-
-可以直接运行编译后的程序或通过 Docker 启动。默认监听端口 `50051`。
-
-### 命令行选项
-```bash
+mkdir build && cd build
+cmake .. && make -j
 ./rtsp_server
 ```
 
----
-
-## 🧩 客户端使用
-
-Python 客户端在 `client/` 目录下，展示了如何远程调用服务并获取视频帧。
-
-### 方式 1：流式传输（推荐）
-
-服务端主动推送帧，低延迟，低 CPU 占用：
-
-```python
-from remote_video_capture import RemoteVideoCapture
-from stream_service_pb2 import DECODER_GPU_CUDA
-import cv2
-
-url = "rtsp://admin:password@192.168.1.100:554/stream"
-
-with RemoteVideoCapture(url, 
-                        decoder_type=DECODER_GPU_CUDA,
-                        decode_interval_ms=100,
-                        gpu_id=0) as cap:
-    
-    # 流式接收，max_fps 限制客户端帧率
-    for ret, frame in cap.stream_frames(max_fps=10):
-        if ret:
-            cv2.imshow('Stream', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-```
-
-### 方式 2：轮询模式
-
-客户端主动请求最新帧：
-
-```python
-with RemoteVideoCapture(url, decoder_type=DECODER_GPU_CUDA) as cap:
-    while True:
-        ret, frame = cap.read()  # 获取单帧
-        if ret:
-            cv2.imshow('Frame', frame)
-            cv2.waitKey(30)
-```
-
-### 获取流信息
-
-```python
-info = cap.get_stream_info()
-print(f"Resolution: {info['width']}x{info['height']}")
-print(f"Decoder: {info['decoder_type']}")
-print(f"Connected: {info['is_connected']}")
-```
-
-### 重新生成 Protobuf 文件
-
+### 生成 Python Proto
 ```bash
 cd client
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. stream_service.proto
@@ -135,53 +40,292 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. stream_servic
 
 ---
 
-## 📌 Protobuf 接口定义
+## 枚举定义
 
-`stream_service.proto` 定义了 gRPC 服务接口：
+### 解码器类型 (DecoderType)
+| 值 | 名称 | 说明 |
+|----|------|------|
+| 0 | DECODER_CPU_OPENCV | OpenCV 软解 |
+| 1 | DECODER_GPU_CUDA | NVIDIA CUDA 硬解 |
+| 2 | DECODER_FFMPEG_NATIVE | FFmpeg 软解 |
 
-### 服务接口
+### 流状态 (StreamStatus)
+| 值 | 名称 | 说明 |
+|----|------|------|
+| 0 | STATUS_CONNECTING | 连接中 |
+| 1 | STATUS_CONNECTED | 已连接 |
+| 2 | STATUS_DISCONNECTED | 无法连接 |
+| 3 | STATUS_NOT_FOUND | 不存在 |
 
-| 方法 | 类型 | 说明 |
+---
+
+## API 接口
+
+### 1. StartStream - 启动流
+
+启动一个 RTSP 流任务。
+
+**请求参数：**
+| 字段 | 类型 | 说明 |
 |------|------|------|
-| `StartStream` | Unary | 启动 RTSP 流，支持 GPU/CPU 解码器选择 |
-| `StopStream` | Unary | 停止流 |
-| `GetLatestFrame` | Unary | 获取单帧（轮询模式） |
-| `StreamFrames` | Server Stream | 流式传输，服务端推送 |
-| `CheckStream` | Unary | 查询流状态和信息 |
+| rtsp_url | string | RTSP 地址 |
+| heartbeat_timeout_ms | int32 | 心跳超时（毫秒），0 表示不超时 |
+| decode_interval_ms | int32 | 解码间隔（毫秒），0 表示不限制 |
+| decoder_type | DecoderType | 解码器类型 |
+| gpu_id | int32 | GPU ID（仅 GPU 解码有效） |
+| keep_on_failure | bool | 打开失败时是否保留任务 |
 
-### 启动流参数
+**响应：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | bool | 是否成功 |
+| stream_id | string | 流 ID |
+| message | string | 消息 |
 
-```protobuf
-message StartRequest {
-    string rtsp_url = 1;              // RTSP 地址
-    int32 heartbeat_timeout_ms = 2;   // 心跳超时
-    int32 decode_interval_ms = 3;     // 解码间隔（ms）
-    DecoderType decoder_type = 4;     // CPU/GPU 解码器
-    int32 gpu_id = 5;                 // GPU ID
-}
+**Python 示例：**
+```python
+from remote_capture import RemoteCapture, DECODER_GPU_CUDA
+
+client = RemoteCapture('127.0.0.1:50051')
+client.connect()
+
+stream_id = client.start_stream(
+    rtsp_url='rtsp://admin:password@192.168.1.100:554/stream',
+    decoder_type=DECODER_GPU_CUDA,
+    heartbeat_timeout_ms=30000,
+    decode_interval_ms=100,
+    gpu_id=0,
+    keep_on_failure=False
+)
+print(f"流已启动: {stream_id}")
 ```
 
-### 解码器类型
+---
+
+### 2. StopStream - 停止流
+
+停止指定的流任务。
+
+**请求参数：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| stream_id | string | 流 ID |
+
+**响应：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | bool | 是否成功 |
+| message | string | 消息 |
+
+**Python 示例：**
+```python
+success = client.stop_stream(stream_id)
+print(f"停止结果: {success}")
+```
+
+---
+
+### 3. GetLatestFrame - 获取单帧
+
+获取指定流的最新一帧图像（轮询模式）。
+
+**请求参数：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| stream_id | string | 流 ID |
+
+**响应：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | bool | 是否成功获取帧 |
+| image_data | bytes | JPEG 编码的图像数据 |
+| message | string | 消息 |
+| stream_exists | bool | 流是否存在 |
+
+**Python 示例：**
+```python
+import cv2
+
+# 循环获取最新帧
+while True:
+    ret, frame = client.read(stream_id)
+    if ret:
+        cv2.imshow('Frame', frame)
+        if cv2.waitKey(30) & 0xFF == ord('q'):
+            break
+```
+
+---
+
+### 4. StreamFrames - 流式传输
+
+服务端流式推送视频帧（推荐方式，低延迟）。
+
+**请求参数：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| stream_id | string | 流 ID |
+| max_fps | int32 | 最大帧率，0 表示不限制 |
+
+**响应（流式）：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | bool | 是否成功获取帧 |
+| image_data | bytes | JPEG 编码的图像数据 |
+| message | string | 消息 |
+| stream_exists | bool | 流是否存在 |
+
+**Python 示例：**
+```python
+import cv2
+
+# 流式接收，限制 15fps
+for ret, frame in client.stream_frames(stream_id, max_fps=15):
+    if ret:
+        cv2.imshow('Stream', frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+cv2.destroyAllWindows()
+```
+
+---
+
+### 5. CheckStream - 查询流状态
+
+查询指定流的详细信息。
+
+**请求参数：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| stream_id | string | 流 ID |
+
+**响应：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| exists | bool | 流是否存在 |
+| status | StreamStatus | 连接状态 |
+| message | string | 状态消息 |
+| rtsp_url | string | RTSP 地址 |
+| decoder_type | DecoderType | 解码器类型 |
+| width | int32 | 视频宽度 |
+| height | int32 | 视频高度 |
+| decode_interval_ms | int32 | 解码间隔 |
+
+**Python 示例：**
+```python
+from remote_capture import STATUS_CONNECTED, STATUS_NAMES
+
+# 获取流详细信息
+info = client.check_stream(stream_id)
+if info:
+    print(f"RTSP: {info['rtsp_url']}")
+    print(f"状态: {info['status_name']}")
+    print(f"分辨率: {info['width']}x{info['height']}")
+    print(f"解码器: {info['decoder_type']}")
+
+# 检查是否已连接
+if client.is_stream_connected(stream_id):
+    print("流已连接")
+
+# 获取状态名称
+status_name = client.get_stream_status_name(stream_id)
+print(f"当前状态: {status_name}")  # "连接中" / "已连接" / "无法连接" / "不存在"
+```
+
+---
+
+### 6. ListStreams - 查询所有流
+
+查询服务端所有流的信息。
+
+**请求参数：** 无
+
+**响应：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| total_count | int32 | 流总数 |
+| streams | StreamInfo[] | 流信息列表 |
+
+**StreamInfo 结构：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| stream_id | string | 流 ID |
+| rtsp_url | string | RTSP 地址 |
+| status | StreamStatus | 连接状态 |
+| decoder_type | DecoderType | 解码器类型 |
+| width | int32 | 视频宽度 |
+| height | int32 | 视频高度 |
+| decode_interval_ms | int32 | 解码间隔 |
+
+**Python 示例：**
+```python
+# 获取所有流信息
+streams = client.list_streams()
+print(f"流总数: {len(streams)}")
+
+for s in streams:
+    print(f"[{s['stream_id'][:8]}...]")
+    print(f"  URL: {s['rtsp_url']}")
+    print(f"  状态: {s['status_name']}")
+    print(f"  分辨率: {s['width']}x{s['height']}")
+
+# 获取流数量
+count = client.get_stream_count()
+```
+
+---
+
+## 完整示例
 
 ```python
-DECODER_CPU_OPENCV = 0    # OpenCV 软解
-DECODER_GPU_CUDA = 1      # NVIDIA CUDA 硬解
-DECODER_FFMPEG_NATIVE = 2 # FFmpeg 软解
+import cv2
+import time
+from remote_capture import (
+    RemoteCapture,
+    DECODER_GPU_CUDA,
+    STATUS_CONNECTED,
+    STATUS_NAMES
+)
+
+# 连接服务器
+with RemoteCapture('127.0.0.1:50051') as client:
+    
+    # 1. 查看现有流
+    print(f"当前流数量: {client.get_stream_count()}")
+    
+    # 2. 启动新流
+    stream_id = client.start_stream(
+        'rtsp://admin:password@192.168.1.100:554/stream',
+        decoder_type=DECODER_GPU_CUDA
+    )
+    
+    # 3. 等待连接
+    for _ in range(10):
+        if client.get_stream_status(stream_id) == STATUS_CONNECTED:
+            break
+        time.sleep(1)
+    
+    # 4. 获取流信息
+    info = client.check_stream(stream_id)
+    print(f"分辨率: {info['width']}x{info['height']}")
+    
+    # 5. 流式获取视频
+    for ret, frame in client.stream_frames(stream_id, max_fps=15):
+        if ret:
+            cv2.imshow('Video', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+    
+    # 6. 停止流
+    client.stop_stream(stream_id)
 ```
 
 ---
 
-## ⚡ 性能特性
-**关键优势：**
-- ✅ 解码一次，所有客户端共享
-- ✅ 编码一次，零拷贝广播
-- ✅ 每个客户端可独立设置帧率
+## 调试工具
 
----
-
-## GRPC UI
-
-使用 grpcui 工具进行接口测试：
+使用 grpcui 进行接口测试：
 ```bash
-.\grpcui.exe -plaintext 172.16.20.193:50051
+grpcui -plaintext 127.0.0.1:50051
 ```
