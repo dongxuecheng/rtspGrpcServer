@@ -235,11 +235,7 @@ class RemoteCapture:
             req = stream_service_pb2.CheckRequest(stream_id=stream_id)
             resp = self.stub.CheckStream(req, timeout=5)
             
-            if not resp.exists:
-                return None
-            
             return {
-                "exists": resp.exists,
                 "stream_id": stream_id,
                 "rtsp_url": resp.rtsp_url,
                 "status": resp.status,
@@ -262,7 +258,10 @@ class RemoteCapture:
         :return: 流是否存在
         """
         info = self.check_stream(stream_id)
-        return False if not info else info.get("exists", False)
+        if info is None:
+            return False
+        status = info.get("status", STATUS_NOT_FOUND)
+        return status != STATUS_NOT_FOUND
     
     def is_stream_connected(self, stream_id: str) -> bool:
         """
@@ -327,7 +326,7 @@ class RemoteCapture:
         
         try:
             req = stream_service_pb2.StreamRequest(stream_id=stream_id, max_fps=max_fps)
-            for resp in self.stub.StreamFrames(req):
+            for resp in self.stub.StreamFrames(req):                 
                 if resp.success and resp.image_data:
                     img_array = np.frombuffer(resp.image_data, dtype=np.uint8)
                     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)

@@ -91,23 +91,29 @@ def example_stream_frames():
         if not stream_id:
             return
         
-        print(f"流已启动: {stream_id[:8]}...")
-        time.sleep(2)
+        for i in range(10):
+            if client.get_stream_status(stream_id) == STATUS_CONNECTED:
+                print("连接成功")
+                break
+            print(f"等待连接... ({i+1}/10)")
+            time.sleep(1)
         
         frame_count = 0
         start = time.time()
         
-        for ret, frame in client.stream_frames(stream_id, max_fps=15):
+        for ret, frame in client.stream_frames(stream_id, max_fps=1):
             if ret:
                 frame_count += 1
-                cv2.imshow("Stream Mode", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+                print(f"接收帧: {frame_count}")
+            else:
+                if client.get_stream_status(stream_id) in (STATUS_DISCONNECTED, STATUS_NOT_FOUND):
+                    print("连接已断开或流不存在")
+                    break
+                else:
+                    print(f"接收帧失败, 状态: {STATUS_NAMES[status]}")
         
         fps = frame_count / (time.time() - start)
         print(f"\n接收 {frame_count} 帧, 平均 {fps:.1f} FPS")
-        
-        cv2.destroyAllWindows()
         client.stop_stream(stream_id)
         print("流已停止")
 
@@ -115,6 +121,6 @@ def example_stream_frames():
 if __name__ == "__main__":
     # 运行示例 (取消注释需要运行的示例)
     
-    # example_list_streams()
+    example_list_streams()
     example_poll_frame()
-    # example_stream_frames()
+    example_stream_frames()

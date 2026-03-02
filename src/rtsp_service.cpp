@@ -247,10 +247,27 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
 
     spdlog::info("[STREAM] Client connected to stream: {}, max_fps: {}", stream_id, max_fps);
 
-    // 持续发送帧，直到客户端断开
+    //持发送续发送帧，直到客户端断开或流被停止
     while (!context->IsCancelled())
     {
-        // 帧率控制
+        //检查流是否仍存在
+        {
+            std::lock_guard<std::mutex> lock(map_mutex_);
+            auto it = streams_.find(stream_id);
+            if (it == streams_.end())
+            {
+                //流已被删除，通知客户端
+                streamingservice::FrameResponse response;
+                response.set_success(false);
+                response.set_message("Stream has been stopped");
+                writer->Write(response);
+                break;
+            }
+            //更新task指针
+            task = it->second;
+        }
+            
+        //控制
         if (frame_interval_us > 0)
         {
             auto now = std::chrono::steady_clock::now();
@@ -291,7 +308,14 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
         }
         else
         {
-            // 流未连接或无数据
+            //流未连接或无数据，但仍存在
+            streamingservice::FrameResponse response;
+            response.set_success(false);
+            response.set_message("No frame available");
+            if (!writer->Write(response))
+            {
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
@@ -319,7 +343,6 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
 
     if (task)
     {
-        response->set_exists(true);
         response->set_status(static_cast<streamingservice::StreamStatus>(task->getStatus()));
         response->set_rtsp_url(task->getUrl());
         response->set_decoder_type(static_cast<streamingservice::DecoderType>(task->getDecoderType()));
@@ -342,7 +365,6 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
     }
     else
     {
-        response->set_exists(false);
         response->set_status(streamingservice::STATUS_NOT_FOUND);
         response->set_message("流不存在");
     }

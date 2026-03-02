@@ -140,7 +140,6 @@ print(f"停止结果: {success}")
 | success | bool | 是否成功获取帧 |
 | image_data | bytes | JPEG 编码的图像数据 |
 | message | string | 消息 |
-| stream_exists | bool | 流是否存在 |
 
 **Python 示例：**
 ```python
@@ -173,7 +172,6 @@ while True:
 | success | bool | 是否成功获取帧 |
 | image_data | bytes | JPEG 编码的图像数据 |
 | message | string | 消息 |
-| stream_exists | bool | 流是否存在 |
 
 **Python 示例：**
 ```python
@@ -203,7 +201,6 @@ cv2.destroyAllWindows()
 **响应：**
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| exists | bool | 流是否存在 |
 | status | StreamStatus | 连接状态 |
 | message | string | 状态消息 |
 | rtsp_url | string | RTSP 地址 |
