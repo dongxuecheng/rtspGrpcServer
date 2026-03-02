@@ -15,6 +15,7 @@ service RTSPStreamService {
     rpc GetLatestFrame (FrameRequest) returns (FrameResponse);
     rpc StreamFrames (StreamRequest) returns (stream FrameResponse);  // 流式传输
     rpc CheckStream (CheckRequest) returns (CheckResponse);
+    rpc ListStreams (ListStreamsRequest) returns (ListStreamsResponse);  // 查询所有流
 }
 
 message StartRequest {
@@ -68,4 +69,26 @@ message CheckResponse {
     int32 width = 6;           // 视频宽度
     int32 height = 7;          // 视频高度
     int32 decode_interval_ms = 8;  // 解码间隔
+}
+
+// 查询所有流请求
+message ListStreamsRequest {
+    // 可扩展：未来可加过滤条件
+}
+
+// 单个流的信息
+message StreamInfo {
+    string stream_id = 1;          // 流 ID
+    string rtsp_url = 2;           // RTSP 地址
+    bool is_connected = 3;         // 是否已连接
+    DecoderType decoder_type = 4;  // 解码器类型
+    int32 width = 5;               // 视频宽度
+    int32 height = 6;              // 视频高度
+    int32 decode_interval_ms = 7;  // 解码间隔
+}
+
+// 查询所有流响应
+message ListStreamsResponse {
+    int32 total_count = 1;         // 流总数
+    repeated StreamInfo streams = 2;  // 流列表
 }

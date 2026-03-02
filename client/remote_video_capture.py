@@ -13,6 +13,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 DECODER_CPU_OPENCV = stream_service_pb2.DECODER_CPU_OPENCV
 DECODER_GPU_CUDA = stream_service_pb2.DECODER_GPU_CUDA
+DECODER_FFMPEG_NATIVE = stream_service_pb2.DECODER_FFMPEG_NATIVE
+
+# 解码器类型名称映射
+DECODER_NAMES = {
+    stream_service_pb2.DECODER_CPU_OPENCV: "CPU (OpenCV)",
+    stream_service_pb2.DECODER_GPU_CUDA: "GPU (CUDA)",
+    stream_service_pb2.DECODER_FFMPEG_NATIVE: "FFmpeg Native"
+}
 
 class RemoteVideoCapture:
     def __init__(self, 
@@ -93,11 +101,7 @@ class RemoteVideoCapture:
             if not resp.exists:
                 return None
             
-            decoder_names = {
-                stream_service_pb2.DECODER_CPU_OPENCV: "CPU (OpenCV)",
-                stream_service_pb2.DECODER_GPU_CUDA: "GPU (CUDA)",
-                stream_service_pb2.DECODER_FFMPEG_NATIVE: "FFmpeg Native"
-            }
+            decoder_names = DECODER_NAMES
             
             return {
                 "stream_id": self.stream_id,
@@ -190,3 +194,49 @@ class RemoteVideoCapture:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
+
+    def list_all_streams(self) -> list:
+        """
+        查询服务器上所有流的信息
+        :return: 流信息列表，每个元素是一个字典
+        """
+        if not self.stub:
+            logging.error("未连接到服务器")
+            return []
+        
+        try:
+            req = stream_service_pb2.ListStreamsRequest()
+            resp = self.stub.ListStreams(req, timeout=5)
+            
+            streams = []
+            for stream_info in resp.streams:
+                streams.append({
+                    "stream_id": stream_info.stream_id,
+                    "rtsp_url": stream_info.rtsp_url,
+                    "is_connected": stream_info.is_connected,
+                    "decoder_type": DECODER_NAMES.get(stream_info.decoder_type, "Unknown"),
+                    "width": stream_info.width,
+                    "height": stream_info.height,
+                    "decode_interval_ms": stream_info.decode_interval_ms
+                })
+            return streams
+        except grpc.RpcError as e:
+            logging.error(f"查询所有流失败: {e.details()}")
+            return []
+
+    def get_stream_count(self) -> int:
+        """
+        获取服务器上的流总数
+        :return: 流总数，失败返回 -1
+        """
+        if not self.stub:
+            logging.error("未连接到服务器")
+            return -1
+        
+        try:
+            req = stream_service_pb2.ListStreamsRequest()
+            resp = self.stub.ListStreams(req, timeout=5)
+            return resp.total_count
+        except grpc.RpcError as e:
+            logging.error(f"获取流数量失败: {e.details()}")
+            return -1

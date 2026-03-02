@@ -19,6 +19,7 @@ public:
     grpc::Status GetLatestFrame(grpc::ServerContext* context, const streamingservice::FrameRequest* request, streamingservice::FrameResponse* response) override;
     grpc::Status StreamFrames(grpc::ServerContext* context, const streamingservice::StreamRequest* request, grpc::ServerWriter<streamingservice::FrameResponse>* writer) override;
     grpc::Status CheckStream(grpc::ServerContext* context, const streamingservice::CheckRequest* request, streamingservice::CheckResponse* response) override;
+    grpc::Status ListStreams(grpc::ServerContext* context, const streamingservice::ListStreamsRequest* request, streamingservice::ListStreamsResponse* response) override;
 
 private:
     void cleanupLoop();

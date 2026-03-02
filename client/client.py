@@ -11,6 +11,7 @@ if __name__ == '__main__':
             time.sleep(2)
             
         print("▶️ 开始拉取画面...")
+
         
         index = 0
         while True:

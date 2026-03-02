@@ -337,6 +337,34 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
 }
 
 // =============================================================
+// ListStreams：查询所有流信息
+// =============================================================
+grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const streamingservice::ListStreamsRequest *request, streamingservice::ListStreamsResponse *response)
+{
+    std::lock_guard<std::mutex> lock(map_mutex_);
+
+    response->set_total_count(static_cast<int>(streams_.size()));
+
+    for (const auto &pair : streams_)
+    {
+        const std::string &stream_id = pair.first;
+        const std::shared_ptr<StreamTask> &task = pair.second;
+
+        auto *stream_info = response->add_streams();
+        stream_info->set_stream_id(stream_id);
+        stream_info->set_rtsp_url(task->getUrl());
+        stream_info->set_is_connected(task->isConnected());
+        stream_info->set_decoder_type(static_cast<streamingservice::DecoderType>(task->getDecoderType()));
+        stream_info->set_width(task->getWidth());
+        stream_info->set_height(task->getHeight());
+        stream_info->set_decode_interval_ms(task->getDecodeIntervalMs());
+    }
+
+    spdlog::info("[LIST] Listed {} streams", streams_.size());
+    return grpc::Status::OK;
+}
+
+// =============================================================
 // cleanupLoop：后台线程，清理心跳超时的流
 // =============================================================
 void RTSPServiceImpl::cleanupLoop()
