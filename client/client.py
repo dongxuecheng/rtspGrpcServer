@@ -19,8 +19,8 @@ import os
 
 # default address can still be overridden via environment var
 SERVER = os.getenv("GRPC_SERVER", "127.0.0.1:50051")
-RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/801"
-RTSP_URL = "rtsp://admin:Admin12345@219.129.97.98:2010/Streaming/channels/101"
+# RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/901"
+RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/501"
 
 
 def example_list_streams():
@@ -105,7 +105,7 @@ def example_stream_frames():
         frame_count = 0
         start = time.time()
         
-        for ret, frame in client.stream_frames(stream_id, max_fps=1):
+        for ret, frame in client.stream_frames(stream_id, max_fps=10):
             if ret:
                 frame_count += 1
                 print(f"接收帧: {frame_count}")
@@ -126,6 +126,6 @@ def example_stream_frames():
 if __name__ == "__main__":
     # 运行示例 (取消注释需要运行的示例)
     
-    example_list_streams()
+    # example_list_streams()
     # example_poll_frame()
     example_stream_frames()

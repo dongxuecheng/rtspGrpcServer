@@ -314,6 +314,12 @@ namespace FFHDDecoder
             m_displayRect.l = videoDecodeCreateInfo.display_area.left;
             m_displayRect.r = videoDecodeCreateInfo.display_area.right;
 
+            if (m_hDecoder)
+            {
+                cuvidDestroyDecoder(m_hDecoder);
+                m_hDecoder = nullptr;
+            }
+                
             checkCudaDriver(cuvidCreateDecoder(&m_hDecoder, &videoDecodeCreateInfo));
             return nDecodeSurface;
         }

@@ -37,7 +37,7 @@ cmake .. && make -j
 cd client
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. stream_service.proto
 ```
-
+docker run -itd --gpus '"device=1"' -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video --name grpc_rtsp_server -p 50051:50051 grpc_rtsp_server
 ---
 
 ## 枚举定义
