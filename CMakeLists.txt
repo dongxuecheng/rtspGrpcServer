@@ -109,6 +109,7 @@ set(SRC_FILES
     src/color.cu            
     src/simple-logger.cpp
     src/cuda_decoder.cpp
+    src/timer_scheduler.cpp
 )
 
 # ==========================================

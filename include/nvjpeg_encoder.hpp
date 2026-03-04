@@ -6,7 +6,7 @@
 
 class NvjpegEncoder : public IImageEncoder {
 public:
-    explicit NvjpegEncoder(int quality = 85);
+    explicit NvjpegEncoder(int quality = 85, int gpu_id = 0);
     ~NvjpegEncoder();
     
     bool encode(const cv::Mat& frame, std::string& out_buffer) override;
@@ -31,6 +31,7 @@ private:
     
     int quality_;
     bool initialized_ = false;
+    int gpu_id_ = 0; // 选择使用哪个 GPU
     
     // 缓存上一次的图像尺寸
     int last_width_ = 0;

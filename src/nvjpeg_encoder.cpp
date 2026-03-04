@@ -19,7 +19,8 @@
         } \
     } while(0)
 
-NvjpegEncoder::NvjpegEncoder(int quality) : quality_(quality) {
+NvjpegEncoder::NvjpegEncoder(int quality, int gpu_id) : quality_(quality), gpu_id_(gpu_id) {
+    cudaSetDevice(gpu_id_);
     initialize();
 }
 
@@ -144,6 +145,7 @@ bool NvjpegEncoder::encode(const cv::Mat& frame, std::string& out_buffer) {
 }
 
 bool NvjpegEncoder::encodeGpu(uint8_t* gpu_bgr_ptr, int width, int height, std::string& out_buffer) {
+    cudaSetDevice(gpu_id_);
     if (!gpu_bgr_ptr || width <= 0 || height <= 0) return false;
     if (!initialized_ && !initialize()) return false;
     

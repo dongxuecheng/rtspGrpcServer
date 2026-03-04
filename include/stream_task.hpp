@@ -1,23 +1,22 @@
 #pragma once
-#include <string>
-#include <thread>
-#include <mutex>
-#include <atomic>
-#include <memory>
-#include <opencv2/opencv.hpp>
-#include "interfaces.hpp"
 
-// 流连接状态
+#include "interfaces.hpp" // 包含 IVideoDecoder, IImageEncoder
+#include <string>
+#include <memory>
+#include <atomic>
+#include <mutex>
+#include <vector>
+#include <chrono>
+
 enum class StreamStatus {
-    CONNECTING = 0,    // 连接中
-    CONNECTED = 1,     // 已连接
-    DISCONNECTED = 2   // 无法连接
+    CONNECTING,
+    CONNECTED,
+    DISCONNECTED
 };
 
-class StreamTask
-{
+// 继承 enable_shared_from_this 至关重要，防止任务在线程池排队时对象被析构
+class StreamTask : public std::enable_shared_from_this<StreamTask> {
 public:
-    // 修改构造函数：增加 encoder 参数和 decoder_type
     StreamTask(const std::string &url,
                int heartbeat_timeout_ms,
                int decode_interval_ms,
@@ -25,30 +24,49 @@ public:
                bool keep_on_failure,
                std::unique_ptr<IVideoDecoder> decoder,
                std::shared_ptr<IImageEncoder> encoder);
+
     ~StreamTask();
 
+    // 启动任务循环
+    void start();
+    
+    // 停止任务
     void stop();
 
-    // 返回 true 表示获取成功，out_buffer 中填入数据
+    // 获取最新编码好的帧（线程安全）
     bool getLatestEncodedFrame(std::string &out_buffer);
 
+    // Getters / Setters
     bool isConnected();
-    bool isTimeout();
     bool isStopped() const { return stopped_; }
-    bool shouldKeepOnFailure() const { return keep_on_failure_; }
     StreamStatus getStatus() const { return status_; }
-
-    std::string getUrl() const { return url_; }
+    const std::string& getUrl() const { return url_; }
     int getDecoderType() const { return decoder_type_; }
-    int getDecodeIntervalMs() const { return decode_interval_ms_; }
     int getWidth() const { return decoder_ ? decoder_->getWidth() : 0; }
     int getHeight() const { return decoder_ ? decoder_->getHeight() : 0; }
+    int getDecodeIntervalMs() const { return decode_interval_ms_; }
+    bool shouldKeepOnFailure() const { return keep_on_failure_; }
+
+    // 心跳保活
     void keepAlive();
+    bool isTimeout();
 
 private:
     void updateHeartbeat();
-    void readLoop();
 
+    // --- 异步调度逻辑 ---
+    
+    // 调度下一步操作
+    // force_delay_ms: 如果 > 0，则启动一个等待线程，稍后再投递任务
+    void scheduleNext(int force_delay_ms = 0); 
+    
+    // 阶段1：IO操作 (Demux / Grab / Network Read) -> 运行在 IO线程池
+    void stepIO();      
+    
+    // 阶段2：计算操作 (Decode / Convert / Encode) -> 运行在 计算线程池
+    void stepCompute(); 
+
+    // --- 成员变量 ---
     std::string url_;
     int heartbeat_timeout_ms_;
     int decode_interval_ms_;
@@ -56,17 +74,25 @@ private:
     bool keep_on_failure_;
 
     std::unique_ptr<IVideoDecoder> decoder_;
-    std::shared_ptr<IImageEncoder> encoder_; // 【新增】持有编码器
+    std::shared_ptr<IImageEncoder> encoder_;
 
-    // 【修改】缓存的是编码后的字节流，而不是原始 Mat
-    std::string latest_encoded_frame_;
-    cv::Mat latest_frame_; // 可选：如果需要保留原始帧数据
+    // 状态控制
+    std::atomic<bool> running_{false};
+    std::atomic<bool> stopped_{false}; // 显式停止标志
+    std::atomic<StreamStatus> status_{StreamStatus::DISCONNECTED};
+    std::atomic<bool> connected_{false};
+    
+    // 保护 decoder_ 的互斥锁（防止多线程重入或与 stop 冲突）
+    std::mutex decoder_mutex_;
 
+    // 保护最新帧数据的互斥锁
     std::mutex frame_mutex_;
-    std::atomic<bool> running_;
-    std::atomic<bool> connected_;
-    std::atomic<bool> stopped_{false};
-    std::atomic<StreamStatus> status_{StreamStatus::CONNECTING};
+    std::string latest_encoded_frame_;
+    
+    // 心跳时间戳
     std::atomic<int64_t> last_access_time_;
-    std::thread worker_thread_;
+
+    // 内部逻辑变量
+    int reconnect_attempts_ = 0;
+    std::chrono::steady_clock::time_point last_encode_time_;
 };

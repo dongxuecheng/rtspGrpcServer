@@ -129,6 +129,7 @@ class RemoteCapture:
             return None
         
         try:
+            print(f"正在启动流: {rtsp_url} (解码器: {DECODER_NAMES.get(decoder_type, 'Unknown')}, GPU ID: {gpu_id})")
             req = stream_service_pb2.StartRequest(
                 rtsp_url=rtsp_url,
                 heartbeat_timeout_ms=heartbeat_timeout_ms,
