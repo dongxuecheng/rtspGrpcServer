@@ -29,6 +29,24 @@ StreamTask::~StreamTask()
     stop();
 }
 
+// ---------------------------------------------------------
+// 可中断的休眠函数，取代死循环或阻塞式 sleep
+// ---------------------------------------------------------
+bool StreamTask::interruptibleSleep(int ms)
+{
+    if (ms <= 0) return true;
+    
+    std::unique_lock<std::mutex> lock(sleep_mutex_);
+    // wait_for 会阻塞等待。如果返回 true，说明满足了 predicate (!running_)，即被外部 stop 中断了
+    // 如果返回 false，说明是超时自然唤醒的
+    bool stopped = sleep_cv_.wait_for(lock, std::chrono::milliseconds(ms), [this]() {
+        return !running_.load();
+    });
+    
+    // 返回 true 表示可以继续执行 (未被 stop)
+    return !stopped; 
+}
+
 void StreamTask::start()
 {
     // 防止重复启动
@@ -41,7 +59,6 @@ void StreamTask::start()
     spdlog::info("StreamTask started: {}", url_);
     
     // 投递第一个 IO 任务
-    // 使用 shared_from_this() 确保对象存活
     auto self = shared_from_this();
     TaskScheduler::instance().getIOPool().enqueue([self](){
         self->stepIO();
@@ -57,6 +74,17 @@ void StreamTask::stop()
         spdlog::info("StreamTask stopping: {}", url_);
         stopped_ = true;
         
+        // 【关键优化】唤醒所有正在 condition_variable 上等待的休眠，使其立即退出，不卡顿
+        {
+            std::lock_guard<std::mutex> sleep_lock(sleep_mutex_);
+            sleep_cv_.notify_all();
+        }
+
+        {
+            std::lock_guard<std::mutex> frame_lock(frame_mutex_);
+            frame_cv_.notify_all(); // 唤醒客户端，让其安全退出
+        }
+        
         // 加锁确保当前没有正在进行的 stepIO/stepCompute 操作 decoder
         std::lock_guard<std::mutex> lock(decoder_mutex_);
         if (decoder_) {
@@ -66,6 +94,7 @@ void StreamTask::stop()
         status_ = StreamStatus::DISCONNECTED;
         connected_ = false;
     }
+    
 }
 
 // 调度辅助函数：决定是立即执行 IO，还是延迟执行 IO
@@ -76,10 +105,9 @@ void StreamTask::scheduleNext(int force_delay_ms)
     auto self = shared_from_this();
 
     if (force_delay_ms > 0) {
-        // 使用定时器调度器，避免创建独立线程
+        // 使用定时器调度器处理长延时（如1000ms的重连），避免长时间占据线程池资源
         TimerScheduler::instance().schedule(force_delay_ms, [self]() {
-            // 通过 weak_ptr 检查任务是否还存活
-            if (auto locked = self) {  // 等价于 self.lock() 检查
+            if (auto locked = self) {  
                 if (locked->running_) {
                     TaskScheduler::instance().getIOPool().enqueue([self]() {
                         if (auto stillAlive = self) {
@@ -105,25 +133,22 @@ void StreamTask::scheduleNext(int force_delay_ms)
 // ---------------------------------------------------------
 void StreamTask::stepIO()
 {
-    // 1. 基础检查
     if (!running_) return;
     
     std::unique_lock<std::mutex> lock(decoder_mutex_);
     if (!decoder_) return;
 
-    // 2. 检查连接状态 & 重连逻辑
+    // 1. 检查连接状态 & 重连逻辑
     if (!decoder_->isOpened())
     {
         const int max_reconnect_attempts = 5;
         if (reconnect_attempts_ >= max_reconnect_attempts) {
             if (!keep_on_failure_) {
                 spdlog::error("Max reconnect attempts reached. Stopping task: {}", url_);
-                // 停止任务
                 lock.unlock();
                 stop(); 
                 return;
             }
-            // 如果允许失败保持，重置计数器，继续无限尝试
             reconnect_attempts_ = 0; 
         }
 
@@ -133,68 +158,90 @@ void StreamTask::stepIO()
 
         spdlog::warn("Attempting to open/reconnect {}/{}: {}", reconnect_attempts_, max_reconnect_attempts, url_);
         
-        // 尝试打开 (可能会阻塞几秒)
         if (decoder_->open(url_)) {
             spdlog::info("Connected successfully: {}", url_);
             status_ = StreamStatus::CONNECTED;
             reconnect_attempts_ = 0;
             last_encode_time_ = std::chrono::steady_clock::now();
         } else {
-            // 打开失败
             lock.unlock();
-            // 延迟 1000ms 后再次进入 stepIO 重试
+            // 重连失败，使用 timer_scheduler 等待 1 秒（不阻塞当前 IO 线程）
             scheduleNext(1000); 
             return;
         }
     }
 
-    // 3. 抓取数据 (Network IO)
-    // grab() 通常内部调用 av_read_frame 或 cuvidParseVideoData
+    // 2. 抓取数据 (Network IO)
     if (!decoder_->grab())
     {
         spdlog::warn("Frame grab failed: {}", url_);
         connected_ = false;
-        decoder_->release(); // 关闭连接，触发下次重连逻辑
+        decoder_->release(); 
         
         lock.unlock();
-        // 立即调度，下次循环会进入 !isOpened 分支进行重连
-        scheduleNext(0); 
+        // 【优化】抓流失败时，休眠几十毫秒再重试，防止本地文件/坏流导致的死循环疯狂投递拉满 CPU
+        if (interruptibleSleep(50)) {
+            scheduleNext(0); 
+        }
         return;
     }
 
     connected_ = true;
     reconnect_attempts_ = 0;
 
-    // 4. 帧率控制 (Decide whether to process)
+    // 3. 帧率控制 (Decide whether to process)
     bool should_process = true;
-    int64_t encode_interval_us = decode_interval_ms_ * 1000LL;
+    int64_t decode_interval_us = decode_interval_ms_ * 1000LL;
 
-    if (encode_interval_us > 0) {
+    if (decode_interval_us > 0) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_encode_time_).count();
-        if (elapsed_us < encode_interval_us) {
+        if (elapsed_us < decode_interval_us) {
             should_process = false;
         }
     }
 
+    // 4. 根据判断决定走向
     if (should_process) {
         // 需要处理：将任务转移到【计算线程池】
-        lock.unlock(); // 解锁，让 IO 线程去处理别的任务
+        lock.unlock(); 
         
         auto self = shared_from_this();
         TaskScheduler::instance().getComputePool().enqueue([self](){
             self->stepCompute();
         });
     } else {
-        // 不需要处理（丢帧）：仅消耗缓存，不解码
-        cv::Mat dummy;
-        decoder_->retrieve(dummy, false); // false = 不需要像素数据
-        
+        // 内部循环丢帧，减少线程池入队/出队开销
+        // 最多连续在当前线程丢 5 帧，防止霸占 IO 线程太久导致其他视频流卡顿
+        int drop_count = 0;
+        while (!should_process && drop_count < 5 && running_) {
+            cv::Mat dummy;
+            decoder_->retrieve(dummy, false); // 消耗缓存中的帧
+            // 休眠 2ms 等待下一帧到来，防止死循环
+            if (!interruptibleSleep(2)) {
+                return; // 被 stop 打断
+            }
+
+            // 尝试抓取下一帧
+            if (!decoder_->grab()) {
+                spdlog::warn("Frame grab failed during drop: {}", url_);
+                connected_ = false;
+                decoder_->release();
+                lock.unlock();
+                if (interruptibleSleep(50)) scheduleNext(0);
+                return;
+            }
+            drop_count++;
+
+            // 重新计算是否该处理了
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_encode_time_).count();
+            if (elapsed_us >= decode_interval_us) {
+                should_process = true;
+            }
+        }
+        // 丢弃了几帧后，无论是否需要处理，都重新投递一次以让出当前线程
         lock.unlock();
-        // 继续 IO 循环，不延迟 (为了尽快清空缓冲区)
-        // 使用 yield 稍微让出 CPU
-        // TaskScheduler::instance().getIOPool().enqueue([self=shared_from_this()](){ self->stepIO(); });
-        // 或者直接调用 scheduleNext(0)
         scheduleNext(0);
     }
 }
@@ -210,26 +257,21 @@ void StreamTask::stepCompute()
     std::unique_lock<std::mutex> lock(decoder_mutex_);
     if (!decoder_ || !decoder_->isOpened()) {
         lock.unlock();
-        scheduleNext(0); // 回到 IO 循环
+        scheduleNext(0); 
         return;
     }
 
     std::string temp_encoded_buffer;
     bool encode_ok = false;
-
-    // 1. 获取解码后的帧 (Retrieve)
-    // 2. 编码 (Encode)
     
     if (decoder_->isGpuFrame() && encoder_->supportsGpuEncode())
     {
         // === 全 GPU 路径 (Zero Copy) ===
-        // retrieve(true) 确保 GPU 上有数据
         cv::Mat dummy;
         if (decoder_->retrieve(dummy, true)) 
         {
             uint8_t* gpu_ptr = decoder_->getGpuFramePtr();
             if (gpu_ptr) {
-                // 如果 Encoder 也是 GPU 的，直接传显存指针
                 encode_ok = encoder_->encodeGpu(
                     gpu_ptr, 
                     decoder_->getWidth(), 
@@ -243,11 +285,8 @@ void StreamTask::stepCompute()
     {
         // === CPU 路径 (Memory Copy) ===
         cv::Mat frame;
-        // retrieve(true) 会发生 Device -> Host 拷贝 (如果解码器是 GPU 的)
-        // 或者 YUV -> BGR 转换 (如果解码器是 CPU 的)
         if (decoder_->retrieve(frame, true) && !frame.empty())
         {
-            // JPEG 编码 (CPU)
             encode_ok = encoder_->encode(frame, temp_encoded_buffer);
         }
     }
@@ -257,13 +296,19 @@ void StreamTask::stepCompute()
     // 3. 更新结果
     if (encode_ok)
     {
-        std::lock_guard<std::mutex> frame_lock(frame_mutex_);
-        latest_encoded_frame_ = std::move(temp_encoded_buffer);
-        last_encode_time_ = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> frame_lock(frame_mutex_);
+            latest_encoded_frame_ = std::move(temp_encoded_buffer);
+            last_encode_time_ = std::chrono::steady_clock::now();
+            frame_seq_++; // 【新增】递增帧序号
+        }
+        frame_cv_.notify_all(); // 【新增】唤醒所有正在 StreamFrames 中等待的 RPC 线程
     }
 
     // 4. 回到 IO 循环抓取下一帧
-    scheduleNext(0);
+    if (interruptibleSleep(1)) {
+        scheduleNext(0);
+    }
 }
 
 void StreamTask::updateHeartbeat()
@@ -283,6 +328,30 @@ bool StreamTask::getLatestEncodedFrame(std::string &out_buffer)
     }
     out_buffer = latest_encoded_frame_;
     return true;
+}
+
+
+bool StreamTask::waitForNextFrame(std::string &out_buffer, uint64_t &current_seq, int timeout_ms)
+{
+    updateHeartbeat();
+    std::unique_lock<std::mutex> lock(frame_mutex_);
+    
+    // 阻塞等待，直到帧序号更新，或者任务被停止
+    bool signaled = frame_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, current_seq]() {
+        return frame_seq_ > current_seq || !running_.load();
+    });
+
+    if (!running_.load() || latest_encoded_frame_.empty()) {
+        return false;
+    }
+
+    if (signaled && frame_seq_ > current_seq) {
+        out_buffer = latest_encoded_frame_; // 拷贝新帧
+        current_seq = frame_seq_;           // 更新客户端持有的序号
+        return true;
+    }
+    
+    return false; // 超时
 }
 
 bool StreamTask::isConnected()

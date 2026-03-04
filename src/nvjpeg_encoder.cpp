@@ -145,7 +145,7 @@ bool NvjpegEncoder::encode(const cv::Mat& frame, std::string& out_buffer) {
 }
 
 bool NvjpegEncoder::encodeGpu(uint8_t* gpu_bgr_ptr, int width, int height, std::string& out_buffer) {
-    cudaSetDevice(gpu_id_);
+    // cudaSetDevice(gpu_id_);
     if (!gpu_bgr_ptr || width <= 0 || height <= 0) return false;
     if (!initialized_ && !initialize()) return false;
     

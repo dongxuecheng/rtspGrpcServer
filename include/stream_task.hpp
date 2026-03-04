@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 #include <chrono>
+#include <condition_variable> // 新增：用于条件变量休眠
 
 enum class StreamStatus {
     CONNECTING,
@@ -46,7 +47,7 @@ public:
     int getHeight() const { return decoder_ ? decoder_->getHeight() : 0; }
     int getDecodeIntervalMs() const { return decode_interval_ms_; }
     bool shouldKeepOnFailure() const { return keep_on_failure_; }
-
+    bool waitForNextFrame(std::string &out_buffer, uint64_t &current_seq, int timeout_ms);
     // 心跳保活
     void keepAlive();
     bool isTimeout();
@@ -57,7 +58,7 @@ private:
     // --- 异步调度逻辑 ---
     
     // 调度下一步操作
-    // force_delay_ms: 如果 > 0，则启动一个等待线程，稍后再投递任务
+    // force_delay_ms: 如果 > 0，则启动一个等待线程/定时器，稍后再投递任务
     void scheduleNext(int force_delay_ms = 0); 
     
     // 阶段1：IO操作 (Demux / Grab / Network Read) -> 运行在 IO线程池
@@ -65,6 +66,9 @@ private:
     
     // 阶段2：计算操作 (Decode / Convert / Encode) -> 运行在 计算线程池
     void stepCompute(); 
+
+    // 返回 false 表示休眠被 stop() 中断；返回 true 表示休眠正常结束
+    bool interruptibleSleep(int ms);
 
     // --- 成员变量 ---
     std::string url_;
@@ -95,4 +99,11 @@ private:
     // 内部逻辑变量
     int reconnect_attempts_ = 0;
     std::chrono::steady_clock::time_point last_encode_time_;
+
+    // 优化：休眠控制相关
+    std::mutex sleep_mutex_;
+    std::condition_variable sleep_cv_;
+
+    std::condition_variable frame_cv_;
+    uint64_t frame_seq_{0};
 };

@@ -26,7 +26,6 @@ RTSPServiceImpl::~RTSPServiceImpl()
     {
         cleanup_thread_.join();
     }
-    // 停止所有流任务
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
         for (auto &pair : streams_)
@@ -40,25 +39,21 @@ RTSPServiceImpl::~RTSPServiceImpl()
 }
 
 // =============================================================
-// StartStream：开启拉流（包含查重、注入解码器/编码器）
+// StartStream：开启拉流
 // =============================================================
 grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const streamingservice::StartRequest *request, streamingservice::StartResponse *response)
 {
     std::string req_url = request->rtsp_url();
 
-    // 1. 查重逻辑：检查是否已经有相同的 URL 在拉流
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
         for (auto &pair : streams_)
         {
             if (pair.second->getUrl() == req_url)
             {
-                // 复用已存在的流
                 std::string existing_id = pair.first;
-                pair.second->keepAlive(); // 刷新心跳保活
-
+                pair.second->keepAlive();
                 spdlog::info("[REUSE] URL already exists. Returning ID: {}", existing_id);
-
                 response->set_success(true);
                 response->set_stream_id(existing_id);
                 response->set_message("Stream already exists, reusing existing task.");
@@ -67,12 +62,11 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         }
     }
 
-    // 2. 创建解码器 (Decoder)
     auto decoder_type = request->decoder_type();
-    int gpu_id = request->gpu_id();  // 默认为 0
-    // 0 ffmpeg 1 nvcuvid
+    int gpu_id = request->gpu_id();  
     std::string decode_type_str = (decoder_type == streamingservice::DECODER_CPU_FFMPEG) ? "FFmpeg" : (decoder_type == streamingservice::DECODER_GPU_NVCUVID) ? "GPU" : "UNKONW";
     spdlog::info("Decoder type: {}, GPU ID: {}", decode_type_str, gpu_id);
+    
     auto decoder = DecoderFactory::create(decoder_type, gpu_id);
     if (!decoder)
     {
@@ -81,22 +75,19 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         return grpc::Status::OK;
     }
 
-    // 3. 创建编码器 (Encoder)
     std::shared_ptr<IImageEncoder> encoder;
     if (decoder_type == streamingservice::DECODER_GPU_NVCUVID)
     {
-        // nvjpegEncoder 内部会调用 cudaSetDevice(gpu_id)，确保在正确的 GPU 上编码
         encoder = std::make_shared<NvjpegEncoder>(85, gpu_id);
         spdlog::info("Using NVJPEG GPU encoder");
     }
     else
     {
-        encoder = std::make_shared<OpencvEncoder>(85);
+        // 降低 CPU JPEG 质量到 75，防止 CPU 飙升
+        encoder = std::make_shared<OpencvEncoder>(75); 
         spdlog::info("Using OpenCV CPU encoder");
     }
 
-    // 4. 创建流任务 (StreamTask)
-    // 注意：构造函数不再启动线程，仅初始化数据结构
     auto task = std::make_shared<StreamTask>(
         req_url,
         request->heartbeat_timeout_ms(),
@@ -109,15 +100,13 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
 
     std::string stream_id = generate_uuid();
 
-    // 5. 再次加锁存入 Map (双重检查)
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
-        // 防止在创建 Task 的间隙，别的线程插入了同样的流
         for (auto &pair : streams_)
         {
             if (pair.second->getUrl() == req_url)
             {
-                task->stop(); // 停止刚才新创建的冗余任务
+                task->stop(); 
                 response->set_success(true);
                 response->set_stream_id(pair.first);
                 response->set_message("Stream created by another request concurrently.");
@@ -127,8 +116,6 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         streams_[stream_id] = task;
     }
 
-    // 【修改】显式启动任务
-    // 这会将第一个任务投递到 IO 线程池，开始运行
     task->start();
 
     response->set_success(true);
@@ -152,14 +139,12 @@ grpc::Status RTSPServiceImpl::StopStream(grpc::ServerContext *context, const str
         if (it != streams_.end())
         {
             task_to_stop = it->second;
-            streams_.erase(it); // 从 Map 中移除，引用计数 -1
+            streams_.erase(it); 
         }
     }
 
     if (task_to_stop)
     {
-        // 这里的 stop() 只是设置标志位并尝试释放资源
-        // 真正的任务会在下一次线程池调度时结束
         task_to_stop->stop(); 
         spdlog::info("[STOP] Stream manually stopped: {}", stream_id);
         response->set_success(true);
@@ -174,7 +159,7 @@ grpc::Status RTSPServiceImpl::StopStream(grpc::ServerContext *context, const str
 }
 
 // =============================================================
-// GetLatestFrame：获取最新帧
+// GetLatestFrame：单次获取最新帧
 // =============================================================
 grpc::Status RTSPServiceImpl::GetLatestFrame(grpc::ServerContext *context, const streamingservice::FrameRequest *request, streamingservice::FrameResponse *response)
 {
@@ -213,7 +198,7 @@ grpc::Status RTSPServiceImpl::GetLatestFrame(grpc::ServerContext *context, const
 }
 
 // =============================================================
-// StreamFrames：流式传输视频帧
+// StreamFrames：【深度优化】条件变量流式传输视频帧
 // =============================================================
 grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context, 
                                             const streamingservice::StreamRequest *request, 
@@ -247,14 +232,15 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
         frame_interval_us = 1000000LL / max_fps;
     }
 
-    auto last_send_time = std::chrono::steady_clock::now();
-    std::string last_frame_data;
+    // 客户端当前处理到的帧序号
+    uint64_t client_seq = 0;
+    // 减去 1 小时保证第一帧能够立刻发送，不受 FPS 限制影响
+    auto last_send_time = std::chrono::steady_clock::now() - std::chrono::hours(1);
 
     spdlog::info("[STREAM] Client connected to stream: {}, max_fps: {}", stream_id, max_fps);
 
     while (!context->IsCancelled())
     {
-        // 检查任务是否仍在运行
         if (task->isStopped()) {
             streamingservice::FrameResponse response;
             response.set_success(false);
@@ -263,46 +249,41 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
             break;
         }
 
-        // 帧率控制
+        std::string encoded_frame;
+        // 【核心优化】阻塞等待新帧最多 500ms。如果有新帧立马唤醒，毫无延迟和 CPU 空转。
+        // timeout 是为了定期循环判断 context->IsCancelled() 以便安全退出
+        bool has_new_frame = task->waitForNextFrame(encoded_frame, client_seq, 500);
+
+        if (!has_new_frame) {
+            continue; // 超时或未获取到，继续循环
+        }
+
+        // FPS 控制策略：不是 sleep，而是直接抛弃超出的帧 (Drop frame to keep real-time)
         if (frame_interval_us > 0)
         {
             auto now = std::chrono::steady_clock::now();
             auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_send_time).count();
             if (elapsed_us < frame_interval_us)
             {
-                std::this_thread::sleep_for(std::chrono::microseconds(frame_interval_us - elapsed_us));
+                // 发送速度太快超过了 max_fps，直接忽略本帧。
+                // 因为 client_seq 已经更新，下一轮 while 会自动等待更新的下一帧
+                continue;
             }
-            last_send_time = std::chrono::steady_clock::now();
+            last_send_time = now;
         }
 
-        std::string encoded_frame;
-        if (task->getLatestEncodedFrame(encoded_frame))
+        // 组装并发送数据包
+        streamingservice::FrameResponse response;
+        response.set_success(true);
+        response.set_image_data(std::move(encoded_frame)); // 优化：使用 move 避免额外拷贝
+        response.set_message("OK");
+
+        if (!writer->Write(response))
         {
-            if (encoded_frame != last_frame_data)
-            {
-                streamingservice::FrameResponse response;
-                response.set_success(true);
-                response.set_image_data(encoded_frame);
-                response.set_message("OK");
-
-                if (!writer->Write(response))
-                {
-                    break;
-                }
-
-                last_frame_data = std::move(encoded_frame);
-                task->keepAlive();
-            }
-            else
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
+            break; // 客户端网络断开
         }
-        else
-        {
-            // 流可能正在连接中或暂时无数据
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
+
+        task->keepAlive();
     }
 
     spdlog::info("[STREAM] Client disconnected from stream: {}", stream_id);
@@ -310,20 +291,16 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
 }
 
 // =============================================================
-// CheckStream：查询流状态
+// CheckStream & ListStreams & cleanupLoop (保持原样)
 // =============================================================
 grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const streamingservice::CheckRequest *request, streamingservice::CheckResponse *response)
 {
     std::string stream_id = request->stream_id();
     std::shared_ptr<StreamTask> task;
-
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
         auto it = streams_.find(stream_id);
-        if (it != streams_.end())
-        {
-            task = it->second;
-        }
+        if (it != streams_.end()) task = it->second;
     }
 
     if (task)
@@ -337,15 +314,9 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
         
         switch (task->getStatus())
         {
-            case StreamStatus::CONNECTED:
-                response->set_message("已连接");
-                break;
-            case StreamStatus::CONNECTING:
-                response->set_message("连接中");
-                break;
-            case StreamStatus::DISCONNECTED:
-                response->set_message("无法连接");
-                break;
+            case StreamStatus::CONNECTED: response->set_message("已连接"); break;
+            case StreamStatus::CONNECTING: response->set_message("连接中"); break;
+            case StreamStatus::DISCONNECTED: response->set_message("无法连接"); break;
         }
     }
     else
@@ -356,13 +327,9 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
     return grpc::Status::OK;
 }
 
-// =============================================================
-// ListStreams：查询所有流信息
-// =============================================================
 grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const streamingservice::ListStreamsRequest *request, streamingservice::ListStreamsResponse *response)
 {
     std::lock_guard<std::mutex> lock(map_mutex_);
-
     response->set_total_count(static_cast<int>(streams_.size()));
 
     for (const auto &pair : streams_)
@@ -379,14 +346,9 @@ grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const st
         stream_info->set_height(task->getHeight());
         stream_info->set_decode_interval_ms(task->getDecodeIntervalMs());
     }
-
-    spdlog::info("[LIST] Listed {} streams", streams_.size());
     return grpc::Status::OK;
 }
 
-// =============================================================
-// cleanupLoop：后台线程，清理心跳超时或已停止的流
-// =============================================================
 void RTSPServiceImpl::cleanupLoop()
 {
     while (manager_running_)
@@ -404,13 +366,11 @@ void RTSPServiceImpl::cleanupLoop()
                 
                 if (it->second->isStopped() && !it->second->shouldKeepOnFailure())
                 {
-                    // 任务已停止且未设置保留，自动清理
                     should_remove = true;
                     reason = "STOPPED";
                 }
                 else if (it->second->isTimeout())
                 {
-                    // 心跳超时，无论是否设置保留都清理
                     should_remove = true;
                     reason = "TIMEOUT";
                 }
@@ -418,7 +378,6 @@ void RTSPServiceImpl::cleanupLoop()
                 if (should_remove)
                 {
                     spdlog::info("[{}] Auto-cleaning stream ID: {}", reason, it->first);
-                    // 添加到停止列表，稍后在锁外停止
                     tasks_to_stop.push_back(it->second);
                     it = streams_.erase(it);
                 }
@@ -429,7 +388,6 @@ void RTSPServiceImpl::cleanupLoop()
             }
         }
 
-        // 在锁外停止任务，防止死锁
         for (auto &task : tasks_to_stop)
         {
             task->stop();

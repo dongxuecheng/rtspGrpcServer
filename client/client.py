@@ -18,9 +18,9 @@ import os
 
 # default address can still be overridden via environment var
 SERVER = os.getenv("GRPC_SERVER", "127.0.0.1:50052")
-# RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/1001"
-RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/901"
-RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/501"
+RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/1001"
+# RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/901"
+# RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/501"
 
 
 def example_list_streams():
@@ -50,7 +50,7 @@ def example_poll_frame():
     
     with RemoteCapture(SERVER) as client:
         # 启动流
-        stream_id = client.start_stream(RTSP_URL, decoder_type=DECODER_GPU_NVCUVID, gpu_id=1)
+        stream_id = client.start_stream(RTSP_URL, decoder_type=DECODER_GPU_NVCUVID, gpu_id=0)
         if not stream_id:
             return
         
@@ -91,7 +91,7 @@ def example_stream_frames():
     
     with RemoteCapture(SERVER) as client:
         # 启动流
-        stream_id = client.start_stream(RTSP_URL, decoder_type=DECODER_GPU_NVCUVID, gpu_id=0)
+        stream_id = client.start_stream(RTSP_URL, decode_interval_ms=1000, decoder_type=DECODER_GPU_NVCUVID, gpu_id=0)
         if not stream_id:
             return
         
@@ -105,7 +105,7 @@ def example_stream_frames():
         frame_count = 0
         start = time.time()
         
-        for ret, frame in client.stream_frames(stream_id, max_fps=10):
+        for ret, frame in client.stream_frames(stream_id, max_fps=1):
             if ret:
                 frame_count += 1
                 print(f"接收帧: {frame_count}")
