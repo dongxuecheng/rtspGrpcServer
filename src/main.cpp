@@ -19,6 +19,7 @@ void display_banner() {
     printf("%s\n","╚██████╔╝██║  ██║██║     ╚██████╗    ██║  ██║   ██║   ███████║██║     ");
     printf("%s\n"," ╚═════╝ ╚═╝  ╚═╝╚═╝      ╚═════╝    ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝     ");
     printf("%s\n","                                 v1.0                                 ");
+    printf("%s\n","                                                                      ");
 }
 
 // 初始化 CUDA 设备，设置同步模式为阻塞同步，避免 CPU 自旋等待
@@ -62,15 +63,18 @@ int main(int argc, char **argv)
     // 默认监听地址/端口，可通过命令行传参覆盖
     // 使用示例： ./rtsp_server 0.0.0.0:60000
     std::string server_address("0.0.0.0:50051");
+    // 先检查帮助选项
+    if (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help"))
+    {
+        std::cout << "Usage: " << argv[0] << " [address:port]\n"
+                << "Default address is 0.0.0.0:50051" << std::endl;
+        return 0;
+    }
+
+    // 然后处理普通地址参数
     if (argc > 1)
     {
         server_address = argv[1];
-    }
-    else if (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help"))
-    {
-        std::cout << "Usage: " << argv[0] << " [address:port]\n"
-                  << "Default address is 0.0.0.0:50051" << std::endl;
-        return 0;
     }
 
     RTSPServiceImpl service;
