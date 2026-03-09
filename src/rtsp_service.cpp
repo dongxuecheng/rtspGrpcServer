@@ -8,6 +8,10 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/ostr.h>
 
+#ifdef __linux__
+#include <jemalloc/jemalloc.h>
+#endif
+
 RTSPServiceImpl::RTSPServiceImpl() : manager_running_(true)
 {
     cleanup_thread_ = std::thread(&RTSPServiceImpl::cleanupLoop, this);
@@ -259,6 +263,7 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
         {
             break;
         }
+        response.Clear();
 
         task->keepAlive();
     }
@@ -334,12 +339,13 @@ void RTSPServiceImpl::cleanupLoop()
 {
     while (manager_running_)
     {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::this_thread::sleep_for(std::chrono::seconds(5));
 
         std::vector<std::shared_ptr<StreamTask>> tasks_to_stop;
 
         {
             std::lock_guard<std::mutex> lock(map_mutex_);
+            spdlog::info("Current active streams: {}", streams_.size());
             for (auto it = streams_.begin(); it != streams_.end();)
             {
                 bool should_remove = false;
@@ -373,10 +379,10 @@ void RTSPServiceImpl::cleanupLoop()
         {
             task->stop();
         }
-        // 🔧 修复：强制通知 Glibc 将多线程产生的缓存碎片内存交还给操作系统
-        // 这对于流媒体这种高频大内存申请/释放的 C++ 服务至关重要
+        // 🔧 强制命令 jemalloc 立即进行内存收缩 (Purge)
+        // 这会告诉 jemalloc：把我所有 Dirty 页面全部交还给 OS
 #ifdef __linux__
-        malloc_trim(0);
+        mallctl("arena.0.purge", NULL, NULL, NULL, 0);
 #endif
     }
 }

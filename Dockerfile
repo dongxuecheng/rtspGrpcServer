@@ -33,6 +33,6 @@ RUN chmod +x /app/entrypoint.sh
 # 暴露端口
 EXPOSE 50051
 
-ENV MALLOC_CONF="dirty_decay_ms:100"
+ENV MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
 # 启动服务
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -7,5 +7,6 @@ if [ -f /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 ]; then
     ln -sf /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 /usr/lib/x86_64-linux-gnu/libnvcuvid.so
 fi
 
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
 # 2. 启动你的服务
 exec ./rtsp_server

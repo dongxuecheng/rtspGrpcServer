@@ -81,7 +81,7 @@ class RemoteCapture:
         try:
             options = [
                 ('grpc.max_receive_message_length', 10 * 1024 * 1024),
-                ('grpc.keepalive_time_ms', 10000),
+                ('grpc.keepalive_time_ms', 5000),
                 ('grpc.keepalive_timeout_ms', 5000),
                 ('grpc.keepalive_permit_without_calls', True)
             ]
