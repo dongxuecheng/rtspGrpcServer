@@ -368,12 +368,6 @@ from remote_capture import (
 SERVER = os.getenv("GRPC_SERVER", "127.0.0.1:50051")
 RTSP_URL = "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/901"
 
-import cv2
-import mmap
-import struct
-import numpy as np
-import os
-
 # 模拟 C/C++ 编译器的内存对齐机制
 def align_up(value, alignment):
     return (value + alignment - 1) & ~(alignment - 1)
