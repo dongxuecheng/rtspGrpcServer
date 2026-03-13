@@ -1,18 +1,21 @@
 services:
-  cuda_stream:
+  grpc_rtsp:
     image: grpc_rtsp_server
-    container_name: grpc_rtsp
+    container_name: grpc_rtsp_server
     runtime: nvidia
+    ipc: host
+    shm_size: 2g
     deploy:
       resources:
         reservations:
           devices:
-            - capabilities: [gpu]
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
     environment:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     ports:
       - "50051:50051"
-    command: []
     stdin_open: true
     tty: true
     restart: unless-stopped

@@ -373,6 +373,12 @@ bool StreamTask::waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint
     updateHeartbeat();
     std::unique_lock<std::mutex> lock(frame_mutex_);
 
+    if (frame_seq_.load(std::memory_order_acquire) > current_seq) {
+        out_buffer = latest_encoded_frame_;
+        current_seq = frame_seq_.load();
+        return true;
+    }
+
     // 使用 wait_for 等待新序列号
     bool signaled = frame_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, current_seq]() {
         return frame_seq_.load(std::memory_order_acquire) > current_seq || !running_.load();
