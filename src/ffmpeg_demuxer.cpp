@@ -62,12 +62,13 @@ namespace FFHDDemuxer
             // avformat_network_deinit();
         }
 
-        bool open(const string &uri, bool auto_reboot = true, int64_t timescale = 1000)
+        bool open(const string &uri, bool auto_reboot = true, int64_t timescale = 1000, bool only_key_frames = false)
         {
             close();
             this->uri_opened_ = uri;
             this->time_scale_opened_ = timescale;
             this->auto_reboot_ = auto_reboot;
+            this->only_key_frames_ = only_key_frames;   
             return this->open(this->CreateFormatContext(uri), timescale);
         }
 
@@ -90,7 +91,7 @@ namespace FFHDDemuxer
                 return false;
 
             close();
-            return this->open(this->uri_opened_, this->auto_reboot_, this->time_scale_opened_);
+            return this->open(this->uri_opened_, this->auto_reboot_, this->time_scale_opened_, this->only_key_frames_);
         }
 
         void close()
@@ -204,6 +205,10 @@ namespace FFHDDemuxer
                     if (m_pkt->stream_index != m_iVideoStream)
                     {
                         continue; // 丢弃音频等非视频包
+                    }
+                    if (this->only_key_frames_ && !(m_pkt->flags & AV_PKT_FLAG_KEY))
+                    {
+                        continue; 
                     }
                 }
                 else
@@ -488,12 +493,13 @@ namespace FFHDDemuxer
         bool flag_is_opened_ = false;
         bool auto_reboot_ = false;
         bool is_reboot_ = false;
+        bool only_key_frames_ = false;
     };
 
-    std::shared_ptr<FFmpegDemuxer> create_ffmpeg_demuxer(const std::string &path, bool auto_reboot)
+    std::shared_ptr<FFmpegDemuxer> create_ffmpeg_demuxer(const std::string &path, bool auto_reboot, bool only_key_frames)
     {
         std::shared_ptr<FFmpegDemuxerImpl> instance(new FFmpegDemuxerImpl());
-        if (!instance->open(path, auto_reboot))
+        if (!instance->open(path, auto_reboot, 1000, only_key_frames))
             instance.reset();
         return instance;
     }

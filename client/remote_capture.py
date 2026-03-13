@@ -114,7 +114,8 @@ class RemoteCapture:
                      decoder_type: int = DECODER_CPU_FFMPEG,
                      gpu_id: int = 0,
                      keep_on_failure: bool = False,
-                     use_shared_mem: bool = False) -> Optional[str]:
+                     use_shared_mem: bool = False,
+                     only_key_frames: bool = False) -> Optional[str]:
         """
         启动一个新的 RTSP 流
         :param rtsp_url: RTSP 地址
@@ -130,7 +131,7 @@ class RemoteCapture:
             return None
         
         try:
-            print(f"正在启动流: {rtsp_url} (解码器: {DECODER_NAMES.get(decoder_type, 'Unknown')}, GPU ID: {gpu_id})")
+            print(f"正在启动流: {rtsp_url} (解码器: {DECODER_NAMES.get(decoder_type, 'Unknown')}, GPU ID: {gpu_id}), Only Key Frames: {'Yes' if only_key_frames else 'No'}")
             req = stream_service_pb2.StartRequest(
                 rtsp_url=rtsp_url,
                 heartbeat_timeout_ms=heartbeat_timeout_ms,
@@ -138,7 +139,8 @@ class RemoteCapture:
                 decoder_type=decoder_type,
                 gpu_id=gpu_id,
                 keep_on_failure=keep_on_failure,
-                use_shared_mem=use_shared_mem
+                use_shared_mem=use_shared_mem,
+                only_key_frames=only_key_frames
             )
             resp = self.stub.StartStream(req, timeout=10)
             

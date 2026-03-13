@@ -12,7 +12,7 @@
 class CudaDecoder : public IVideoDecoder
 {
 public:
-    CudaDecoder(int gpu_id = 0) : gpu_id_(gpu_id) {}
+    CudaDecoder(int gpu_id = 0, bool only_key_frames_ = false) : gpu_id_(gpu_id), only_key_frames_(only_key_frames_) {}
     virtual ~CudaDecoder() { release(); }
 
     bool open(const std::string &url) override;
@@ -42,6 +42,7 @@ private:
 
     // 用于处理解码器延迟（多个输入包才产出一帧，或一个包产出多帧的情况）
     int decoded_frames_available_ = 0;
+    bool only_key_frames_ = false; // 是否只处理关键帧（可选）
 
 private:
     std::string last_url_;    // 保存 URL 用于重连

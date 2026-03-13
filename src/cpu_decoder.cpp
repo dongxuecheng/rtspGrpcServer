@@ -19,7 +19,7 @@ bool CpuDecoder::open(const std::string &url)
         release();
 
         // 1. 创建解封装器
-        demuxer_ = FFHDDemuxer::create_ffmpeg_demuxer(url, true);
+        demuxer_ = FFHDDemuxer::create_ffmpeg_demuxer(url, true, this->only_key_frames_);
         if (!demuxer_)
         {
             spdlog::warn("[WARN] Attempt {}: Failed to create demuxer for {}", attempt, url);

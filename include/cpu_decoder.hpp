@@ -12,7 +12,7 @@
 class CpuDecoder : public IVideoDecoder
 {
 public:
-    CpuDecoder() = default;
+    CpuDecoder(bool only_key_frames = false) : only_key_frames_(only_key_frames) {}
     virtual ~CpuDecoder() { release(); }
 
     // 实现 IVideoDecoder 核心接口
@@ -37,6 +37,7 @@ private:
     std::string last_url_;    // 保存 URL 供后续重连使用
     int frames_to_skip_ = 15;  // 待丢弃帧计数（CPU端通常不需要丢弃太多）
     bool is_opened_ = false;
+    bool only_key_frames_ = false; // 是否只处理关键帧（可选）
 
     
     std::shared_ptr<FFHDDemuxer::FFmpegDemuxer> demuxer_;

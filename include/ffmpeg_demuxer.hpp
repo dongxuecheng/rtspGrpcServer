@@ -35,7 +35,7 @@ namespace FFHDDemuxer
         virtual bool reopen() = 0;
     };
 
-    std::shared_ptr<FFmpegDemuxer> create_ffmpeg_demuxer(const std::string &uri, bool auto_reboot = false);
+    std::shared_ptr<FFmpegDemuxer> create_ffmpeg_demuxer(const std::string &uri, bool auto_reboot = false, bool only_key_frames = false);
     std::shared_ptr<FFmpegDemuxer> create_ffmpeg_demuxer(std::shared_ptr<DataProvider> provider);
 }; // namespace FFHDDemuxer
 

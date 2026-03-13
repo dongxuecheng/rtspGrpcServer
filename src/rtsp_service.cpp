@@ -67,12 +67,13 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
 
     auto decoder_type = request->decoder_type();
     int gpu_id = request->gpu_id();
+    bool only_key_frames = request->only_key_frames();
     std::string decode_type_str = (decoder_type == streamingservice::DECODER_CPU_FFMPEG) ? "FFmpeg" : (decoder_type == streamingservice::DECODER_GPU_NVCUVID) ? "GPU"
                                                                                                                                                               : "UNKNOWN";
-    spdlog::info("Decoder type: {}, GPU ID: {}", decode_type_str, gpu_id);
+    spdlog::info("Decoder type: {}, GPU ID: {}, Only key frames: {}", decode_type_str, gpu_id, only_key_frames ? "Yes" : "No");
 
     // 耗时操作：在无锁状态下创建解码器和编码器
-    auto decoder = DecoderFactory::create(decoder_type, gpu_id);
+    auto decoder = DecoderFactory::create(decoder_type, gpu_id, only_key_frames);
     if (!decoder)
     {
         response->set_success(false);

@@ -33,6 +33,7 @@ message StartRequest {
     int32 gpu_id = 5;                // GPU ID，仅对 GPU 解码有效，默认 0
     bool keep_on_failure = 6;        // 打开失败时是否保留任务，默认 false（即自动删除）
     bool use_shared_mem = 7; // 是否写入共享内存
+    bool only_key_frames = 8; // 是否只解码关键帧
 }
 
 message StartResponse {

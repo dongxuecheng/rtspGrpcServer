@@ -19,7 +19,7 @@ bool CudaDecoder::open(const std::string &url)
         release();
 
         // 1. 创建解封装器
-        demuxer_ = FFHDDemuxer::create_ffmpeg_demuxer(url, false);
+        demuxer_ = FFHDDemuxer::create_ffmpeg_demuxer(url, false, this->only_key_frames_);
         if (!demuxer_)
         {
             std::cerr << "[WARN] Attempt " << attempt << ": Failed to create demuxer for " << url << std::endl;
