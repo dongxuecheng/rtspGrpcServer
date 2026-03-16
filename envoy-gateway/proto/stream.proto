@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package streamingservice;
+
+option go_package = "./streamingservice";
+
+// 引入 Google API 的 HTTP 注解支持
+import "google/api/annotations.proto";
+
+// 定义支持的解码器类型
+enum DecoderType {
+    DECODER_CPU_FFMPEG = 0;   
+    DECODER_GPU_NVCUVID = 1;     
+}
+
+enum StreamStatus {
+    STATUS_CONNECTING = 0;    
+    STATUS_CONNECTED = 1;     
+    STATUS_DISCONNECTED = 2;  
+    STATUS_NOT_FOUND = 3;     
+}
+
+service RTSPStreamService {
+    rpc StartStream (StartRequest) returns (StartResponse) {
+        option (google.api.http) = {
+            post: "/v1/streams/start"
+            body: "*"
+        };
+    }
+
+    rpc StopStream (StopRequest) returns (StopResponse) {
+        option (google.api.http) = {
+            post: "/v1/streams/stop"
+            body: "*"
+        };
+    }
+
+    rpc GetLatestFrame (FrameRequest) returns (FrameResponse) {
+        option (google.api.http) = {
+            get: "/v1/streams/{stream_id}/frame"
+        };
+    }
+
+    // 注意：流式传输在 HTTP 中会被转换为分块响应 (Chunked response)
+    rpc StreamFrames (StreamRequest) returns (stream FrameResponse) {
+        option (google.api.http) = {
+            get: "/v1/streams/{stream_id}/stream"
+        };
+    }
+
+    rpc CheckStream (CheckRequest) returns (CheckResponse) {
+        option (google.api.http) = {
+            get: "/v1/streams/{stream_id}/status"
+        };
+    }
+
+    rpc ListStreams (ListStreamsRequest) returns (ListStreamsResponse) {
+        option (google.api.http) = {
+            get: "/v1/streams"
+        };
+    }
+
+    rpc UpdateStream (UpdateStreamRequest) returns (UpdateStreamResponse) {
+        option (google.api.http) = {
+            put: "/v1/streams/{stream_id}"
+            body: "*"
+        };
+    }
+}
+
+message StartRequest {
+    string rtsp_url = 1;
+    int32 heartbeat_timeout_ms = 2; 
+    int32 decode_interval_ms = 3;   
+    DecoderType decoder_type = 4;    
+    int32 gpu_id = 5;                
+    bool keep_on_failure = 6;        
+    bool use_shared_mem = 7; 
+    bool only_key_frames = 8; 
+}
+
+message StartResponse {
+    bool success = 1;
+    string stream_id = 2;
+    string message = 3;
+}
+
+message StopRequest {
+    string stream_id = 1;
+}
+
+message StopResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message FrameRequest {
+    string stream_id = 1;
+}
+
+message StreamRequest {
+    string stream_id = 1;
+    int32 max_fps = 2;  
+}
+
+message FrameResponse {
+    bool success = 1;
+    bytes image_data = 2; // JSON 会将 bytes 自动转换为 Base64 字符串
+    string message = 3;
+}
+
+message CheckRequest {
+    string stream_id = 1;
+}
+
+message CheckResponse {
+    StreamStatus status = 1;   
+    string message = 2;        
+    string rtsp_url = 3;       
+    DecoderType decoder_type = 4;  
+    int32 width = 5;           
+    int32 height = 6;          
+    int32 decode_interval_ms = 7;  
+}
+
+message ListStreamsRequest {
+}
+
+message StreamInfo {
+    string stream_id = 1;          
+    string rtsp_url = 2;           
+    StreamStatus status = 3;       
+    DecoderType decoder_type = 4;  
+    int32 width = 5;               
+    int32 height = 6;              
+    int32 decode_interval_ms = 7;  
+}
+
+message ListStreamsResponse {
+    int32 total_count = 1;         
+    repeated StreamInfo streams = 2;  
+}
+
+message UpdateStreamRequest {
+  string stream_id = 1;
+  string new_rtsp_url = 2;
+}
+
+message UpdateStreamResponse {
+  bool success = 1;
+  string message = 2;
+}
