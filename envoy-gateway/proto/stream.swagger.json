@@ -1,0 +1,478 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "stream.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "RTSPStreamService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/v1/streams": {
+      "get": {
+        "operationId": "RTSPStreamService_ListStreams",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/streamingserviceListStreamsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    },
+    "/v1/streams/start": {
+      "post": {
+        "operationId": "RTSPStreamService_StartStream",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/streamingserviceStartResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/streamingserviceStartRequest"
+            }
+          }
+        ],
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    },
+    "/v1/streams/stop": {
+      "post": {
+        "operationId": "RTSPStreamService_StopStream",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/streamingserviceStopResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/streamingserviceStopRequest"
+            }
+          }
+        ],
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    },
+    "/v1/streams/{streamId}": {
+      "put": {
+        "operationId": "RTSPStreamService_UpdateStream",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/streamingserviceUpdateStreamResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "streamId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/RTSPStreamServiceUpdateStreamBody"
+            }
+          }
+        ],
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    },
+    "/v1/streams/{streamId}/frame": {
+      "get": {
+        "operationId": "RTSPStreamService_GetLatestFrame",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/streamingserviceFrameResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "streamId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    },
+    "/v1/streams/{streamId}/status": {
+      "get": {
+        "operationId": "RTSPStreamService_CheckStream",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/streamingserviceCheckResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "streamId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    },
+    "/v1/streams/{streamId}/stream": {
+      "get": {
+        "summary": "\u6ce8\u610f\uff1a\u6d41\u5f0f\u4f20\u8f93\u5728 HTTP \u4e2d\u4f1a\u88ab\u8f6c\u6362\u4e3a\u5206\u5757\u54cd\u5e94 (Chunked response)",
+        "operationId": "RTSPStreamService_StreamFrames",
+        "responses": {
+          "200": {
+            "description": "A successful response.(streaming responses)",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "$ref": "#/definitions/streamingserviceFrameResponse"
+                },
+                "error": {
+                  "$ref": "#/definitions/rpcStatus"
+                }
+              },
+              "title": "Stream result of streamingserviceFrameResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "streamId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "maxFps",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "RTSPStreamService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "RTSPStreamServiceUpdateStreamBody": {
+      "type": "object",
+      "properties": {
+        "newRtspUrl": {
+          "type": "string"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "streamingserviceCheckResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/streamingserviceStreamStatus"
+        },
+        "message": {
+          "type": "string"
+        },
+        "rtspUrl": {
+          "type": "string"
+        },
+        "decoderType": {
+          "$ref": "#/definitions/streamingserviceDecoderType"
+        },
+        "width": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "height": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "decodeIntervalMs": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "streamingserviceDecoderType": {
+      "type": "string",
+      "enum": [
+        "DECODER_CPU_FFMPEG",
+        "DECODER_GPU_NVCUVID"
+      ],
+      "default": "DECODER_CPU_FFMPEG",
+      "title": "\u5b9a\u4e49\u652f\u6301\u7684\u89e3\u7801\u5668\u7c7b\u578b"
+    },
+    "streamingserviceFrameResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "imageData": {
+          "type": "string",
+          "format": "byte",
+          "title": "JSON \u4f1a\u5c06 bytes \u81ea\u52a8\u8f6c\u6362\u4e3a Base64 \u5b57\u7b26\u4e32"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "streamingserviceListStreamsResponse": {
+      "type": "object",
+      "properties": {
+        "totalCount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "streams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/streamingserviceStreamInfo"
+          }
+        }
+      }
+    },
+    "streamingserviceStartRequest": {
+      "type": "object",
+      "properties": {
+        "rtspUrl": {
+          "type": "string"
+        },
+        "heartbeatTimeoutMs": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "decodeIntervalMs": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "decoderType": {
+          "$ref": "#/definitions/streamingserviceDecoderType"
+        },
+        "gpuId": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "keepOnFailure": {
+          "type": "boolean"
+        },
+        "useSharedMem": {
+          "type": "boolean"
+        },
+        "onlyKeyFrames": {
+          "type": "boolean"
+        }
+      }
+    },
+    "streamingserviceStartResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "streamId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "streamingserviceStopRequest": {
+      "type": "object",
+      "properties": {
+        "streamId": {
+          "type": "string"
+        }
+      }
+    },
+    "streamingserviceStopResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "streamingserviceStreamInfo": {
+      "type": "object",
+      "properties": {
+        "streamId": {
+          "type": "string"
+        },
+        "rtspUrl": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/streamingserviceStreamStatus"
+        },
+        "decoderType": {
+          "$ref": "#/definitions/streamingserviceDecoderType"
+        },
+        "width": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "height": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "decodeIntervalMs": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "streamingserviceStreamStatus": {
+      "type": "string",
+      "enum": [
+        "STATUS_CONNECTING",
+        "STATUS_CONNECTED",
+        "STATUS_DISCONNECTED",
+        "STATUS_NOT_FOUND"
+      ],
+      "default": "STATUS_CONNECTING"
+    },
+    "streamingserviceUpdateStreamResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "host": "172.16.20.193:8080",
+  "schemes": [
+    "http"
+  ]
+}

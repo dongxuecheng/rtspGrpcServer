@@ -1,125 +1,95 @@
-# RTSP Stream Service API 文档 (HTTP/RESTful)
+# RTSPStreamService API 详细文档
 
-本服务提供 HTTP/JSON 接口，底层通过 Envoy 网关自动转换为 gRPC 调用。
-**基础 URL**: `http://localhost:8080`
+## 1. API 路径与操作列表
 
----
-
-## 1. 启动流 (StartStream)
-启动 RTSP 解码任务。
-
-*   **URL**: `/v1/streams/start`
-*   **Method**: `POST`
-*   **Content-Type**: `application/json`
-*   **Request Body**:
-```json
-{
-  "rtsp_url": "string",
-  "heartbeat_timeout_ms": 0,
-  "decode_interval_ms": 0,
-  "decoder_type": "DECODER_CPU_FFMPEG | DECODER_GPU_NVCUVID",
-  "gpu_id": 0,
-  "keep_on_failure": false,
-  "use_shared_mem": false,
-  "only_key_frames": false
-}
-```
-*   **Response**: `{"success": true, "stream_id": "...", "message": "..."}`
+| 路径 | 方法 | 操作 ID | 描述 |
+| :--- | :--- | :--- | :--- |
+| `/v1/streams` | `GET` | `RTSPStreamService_ListStreams` | 列出所有流 |
+| `/v1/streams/start` | `POST` | `RTSPStreamService_StartStream` | 启动流服务 |
+| `/v1/streams/stop` | `POST` | `RTSPStreamService_StopStream` | 停止流服务 |
+| `/v1/streams/{streamId}` | `PUT` | `RTSPStreamService_UpdateStream` | 更新流地址 |
+| `/v1/streams/{streamId}/frame` | `GET` | `RTSPStreamService_GetLatestFrame` | 获取最新帧 |
+| `/v1/streams/{streamId}/status` | `GET` | `RTSPStreamService_CheckStream` | 检查流状态 |
+| `/v1/streams/{streamId}/stream` | `GET` | `RTSPStreamService_StreamFrames` | 流式传输帧数据 |
 
 ---
 
-## 2. 停止流 (StopStream)
-删除并停止指定的解码任务。
+## 2. 详细请求参数与响应体模型
 
-*   **URL**: `/v1/streams/stop`
-*   **Method**: `POST`
-*   **Request Body**: `{"stream_id": "string"}`
-*   **Response**: `{"success": true, "message": "..."}`
+### 2.1 启动与管理请求模型
+| 模型名称 | 字段名 | 类型 | 必填 | 描述 |
+| :--- | :--- | :--- | :--- | :--- |
+| **StartRequest** | `rtspUrl` | string | 是 | RTSP 流媒体源地址 |
+| | `heartbeatTimeoutMs` | integer | 否 | 心跳超时时间 (ms) |
+| | `decodeIntervalMs` | integer | 否 | 解码间隔 (ms) |
+| | `decoderType` | enum | 否 | `DECODER_CPU_FFMPEG` / `DECODER_GPU_NVCUVID` |
+| | `gpuId` | integer | 否 | GPU ID |
+| | `keepOnFailure` | boolean | 否 | 出错后是否维持状态 |
+| | `useSharedMem` | boolean | 否 | 是否启用共享内存 |
+| | `onlyKeyFrames` | boolean | 否 | 是否仅抓取关键帧 |
+| **StopRequest** | `streamId` | string | 是 | 需要停止的流 ID |
+| **UpdateBody** | `newRtspUrl` | string | 是 | 更新后的目标 RTSP URL |
 
----
-
-## 3. 获取最新帧 (GetLatestFrame)
-获取指定流的当前最新视频帧。
-
-*   **URL**: `/v1/streams/{stream_id}/frame`
-*   **Method**: `GET`
-*   **Response**:
-```json
-{
-  "success": true,
-  "image_data": "base64_string",
-  "message": "string"
-}
-```
-
----
-
-## 4. 流式传输 (StreamFrames)
-持续获取视频帧流（HTTP Chunked）。
-
-*   **URL**: `/v1/streams/{stream_id}/stream`
-*   **Method**: `GET`
-*   **Query Parameters**: `max_fps` (可选)
-*   **Response**: 持续的 `FrameResponse` 数据流。
-
----
-
-## 5. 检查流状态 (CheckStream)
-查询指定流的详细信息（分辨率、状态等）。
-
-*   **URL**: `/v1/streams/{stream_id}/status`
-*   **Method**: `GET`
-*   **Response**:
-```json
-{
-  "status": "STATUS_CONNECTED | STATUS_DISCONNECTED | ...",
-  "message": "string",
-  "rtsp_url": "string",
-  "decoder_type": "...",
-  "width": 0,
-  "height": 0,
-  "decode_interval_ms": 0
-}
-```
+### 2.2 响应模型 (详细结构)
+| 模型名称 | 字段名 | 类型 | 描述 |
+| :--- | :--- | :--- | :--- |
+| **ListStreamsResponse** | `totalCount` | integer | 流总数 |
+| | `streams` | array | `streamingserviceStreamInfo` 列表 |
+| **StreamInfo** | `streamId` | string | 流 ID |
+| | `rtspUrl` | string | 流 URL |
+| | `status` | enum | 状态 (`STATUS_...`) |
+| | `decoderType` | enum | 解码器类型 |
+| | `width` | integer | 图像宽 |
+| | `height` | integer | 图像高 |
+| | `decodeIntervalMs` | integer | 解码间隔 |
+| **FrameResponse** | `success` | boolean | 操作成功标志 |
+| | `imageData` | string | Base64 格式的图像二进制 |
+| | `message` | string | 状态或错误描述 |
+| **CheckResponse** | `status` | enum | 当前连接状态 |
+| | `message` | string | 状态消息 |
+| | `rtspUrl` | string | 流 URL |
+| | `decoderType` | enum | 解码器类型 |
+| | `width` | integer | 宽 |
+| | `height` | integer | 高 |
+| | `decodeIntervalMs` | integer | 解码间隔 |
 
 ---
 
-## 6. 查询所有流 (ListStreams)
-获取服务器上当前所有管理中的流任务。
+## 3. 标准错误对象 (rpcStatus)
+所有接口的 `default` 响应均为该模型：
 
-*   **URL**: `/v1/streams`
-*   **Method**: `GET`
-*   **Response**:
-```json
-{
-  "total_count": 0,
-  "streams": [
-    {
-      "stream_id": "string",
-      "rtsp_url": "string",
-      "status": "string",
-      "decoder_type": "string",
-      "width": 0,
-      "height": 0,
-      "decode_interval_ms": 0
-    }
-  ]
-}
-```
+| 属性名 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| `code` | integer | 错误代码 (int32) |
+| `message` | string | 错误信息描述 |
+| `details` | array | 详细错误集合 (protobufAny 对象) |
 
 ---
 
-## 7. 更新流信息 (UpdateStream)
-仅用于更新流的 RTSP 连接地址。
+## 4. 枚举值定义 (Enum)
 
-*   **URL**: `/v1/streams/{stream_id}`
-*   **Method**: `PUT`
-*   **Request Body**: `{"new_rtsp_url": "string"}`
-*   **Response**: `{"success": true, "message": "..."}`
+### 4.1 流状态 (`streamingserviceStreamStatus`)
+| 枚举值 | 说明 |
+| :--- | :--- |
+| `STATUS_CONNECTING` | 正在连接中 |
+| `STATUS_CONNECTED` | 已成功连接 |
+| `STATUS_DISCONNECTED` | 连接已中断 |
+| `STATUS_NOT_FOUND` | 未找到指定的流 |
+
+### 4.2 解码器类型 (`streamingserviceDecoderType`)
+| 枚举值 | 说明 |
+| :--- | :--- |
+| `DECODER_CPU_FFMPEG` | CPU 软件解码 (默认) |
+| `DECODER_GPU_NVCUVID` | NVIDIA 硬件加速解码 |
 
 ---
 
-### 重要注意事项：
-1.  **关于 Bytes 数据**: 所有的 `image_data` (bytes 类型) 在通过 Envoy 时会自动被转码为 **Base64 编码的字符串**。如果你在前端开发中使用，请将其赋值给 `<img>` 标签的 `src` 属性：`src="data:image/jpeg;base64," + imageData`。
-2.  **关于字段命名**: 虽然你在 `proto` 中定义的是下划线命名（如 `rtsp_url`），但在 JSON 请求中可以使用驼峰命名（如 `rtspUrl`）。Envoy 自动支持这两种格式的转换。
-3.  **超时处理**: 所有的 GET/POST 请求默认在 `envoy.yaml` 中配置了 `60s` 超时，如果你的解码任务需要更长时间初始化，请在 `envoy.yaml` 的 `route` 配置中调整 `timeout` 值。
+## 5. 特殊接口说明：StreamFrames (`/v1/streams/{streamId}/stream`)
+该接口为流式响应，其返回结构如下：
+
+| 结构层级 | 字段 | 类型 | 说明 |
+| :--- | :--- | :--- | :--- |
+| **Root** | `result` | object | `streamingserviceFrameResponse` 实例 |
+| **Root** | `error` | object | `rpcStatus` 实例 |
+
+* **注意**：该接口同时支持 `maxFps` (integer, query parameter) 用于控制下行帧率，单位为帧/秒。文档中提到的 `Chunked response` 意味着客户端需要持续读取 HTTP 响应体流，直到连接关闭或发生错误。

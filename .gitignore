@@ -3,3 +3,4 @@ client/images/
 build/
 *.tar
 *.tar.gz
+protoc-gen-openapiv2
