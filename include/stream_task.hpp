@@ -54,6 +54,9 @@ public:
     int getHeight() const { return decoder_ ? decoder_->getHeight() : 0; }
     int getDecodeIntervalMs() const { return decode_interval_ms_; }
     bool shouldKeepOnFailure() const { return keep_on_failure_; }
+    bool usesSharedMemory() const { return use_shared_mem_; }
+    int getHeartbeatTimeMs() const { return heartbeat_timeout_ms_; }
+    bool onlyKeyFrames() const { return decoder_->onlyKeyFrames(); }
 
     // 条件变量等待下一帧（零拷贝）
     bool waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms);

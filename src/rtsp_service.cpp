@@ -304,31 +304,35 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
             task = it->second;
     }
 
-    if (task)
-    {
-        response->set_status(static_cast<streamingservice::StreamStatus>(task->getStatus()));
-        response->set_rtsp_url(task->getUrl());
-        response->set_decoder_type(static_cast<streamingservice::DecoderType>(task->getDecoderType()));
-        response->set_width(task->getWidth());
-        response->set_height(task->getHeight());
-        response->set_decode_interval_ms(task->getDecodeIntervalMs());
+    // 2. 获取响应中 StreamInfo 的可变指针
+    auto* info = response->mutable_stream();
+    info->set_stream_id(stream_id); // 建议把 ID 也填回去，方便客户端校验
 
-        switch (task->getStatus())
-        {
-        case StreamStatus::CONNECTED:
-            response->set_message("已连接");
-            break;
-        case StreamStatus::CONNECTING:
-            response->set_message("连接中");
-            break;
-        case StreamStatus::DISCONNECTED:
-            response->set_message("无法连接");
-            break;
+    if (task) 
+    {
+        // 填充基本信息
+        info->set_status(static_cast<streamingservice::StreamStatus>(task->getStatus()));
+        info->set_rtsp_url(task->getUrl());
+        info->set_decoder_type(static_cast<streamingservice::DecoderType>(task->getDecoderType()));
+        info->set_width(task->getWidth());
+        info->set_height(task->getHeight());
+        info->set_decode_interval_ms(task->getDecodeIntervalMs());
+        info->set_only_key_frames(task->onlyKeyFrames());
+        info->set_use_shared_mem(task->usesSharedMemory()); 
+        info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
+        info->set_keep_on_failure(task->shouldKeepOnFailure());
+
+        // 处理状态文字（如果 proto 中没有 message 字段，建议在 proto 添加 string message = 12;）
+        // 假设你在 StreamInfo 中添加了 string message 字段：
+        switch (task->getStatus()) {
+            case StreamStatus::CONNECTED:    response->set_message("已连接"); break;
+            case StreamStatus::CONNECTING:   response->set_message("连接中"); break;
+            case StreamStatus::DISCONNECTED: response->set_message("无法连接"); break;
+            default:                         response->set_message("未知状态"); break;
         }
     }
-    else
-    {
-        response->set_status(streamingservice::STATUS_NOT_FOUND);
+    else {
+        info->set_status(streamingservice::STATUS_NOT_FOUND);
         response->set_message("流不存在");
     }
     return grpc::Status::OK;

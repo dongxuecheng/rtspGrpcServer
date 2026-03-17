@@ -203,7 +203,11 @@ class RemoteCapture:
                     "decoder_type_raw": s.decoder_type,
                     "width": s.width,
                     "height": s.height,
-                    "decode_interval_ms": s.decode_interval_ms
+                    "decode_interval_ms": s.decode_interval_ms,
+                    "heartbeat_timeout_ms": s.heartbeat_timeout_ms,
+                    "keep_on_failure": s.keep_on_failure,
+                    "only_key_frames": s.only_key_frames,
+                    "use_shared_mem": s.use_shared_mem
                 })
             return streams
         except grpc.RpcError as e:
@@ -238,19 +242,27 @@ class RemoteCapture:
             req = stream_service_pb2.CheckRequest(stream_id=stream_id)
             resp = self.stub.CheckStream(req, timeout=5)
             
+            # 注意：resp 包含 stream 字段和 top-level 的 message 字段
+            s = resp.stream
+            
             return {
-                "stream_id": stream_id,
-                "rtsp_url": resp.rtsp_url,
-                "status": resp.status,
-                "status_name": STATUS_NAMES.get(resp.status, "未知"),
-                "decoder_type": DECODER_NAMES.get(resp.decoder_type, "Unknown"),
-                "decoder_type_raw": resp.decoder_type,
-                "width": resp.width,
-                "height": resp.height,
-                "decode_interval_ms": resp.decode_interval_ms,
-                "message": resp.message
+                "stream_id": s.stream_id or stream_id,
+                "rtsp_url": s.rtsp_url,
+                "status": s.status,
+                "status_name": STATUS_NAMES.get(s.status, "未知"),
+                "decoder_type": DECODER_NAMES.get(s.decoder_type, "Unknown"),
+                "decoder_type_raw": s.decoder_type,
+                "width": s.width,
+                "height": s.height,
+                "decode_interval_ms": s.decode_interval_ms,
+                "heartbeat_timeout_ms": s.heartbeat_timeout_ms,
+                "keep_on_failure": s.keep_on_failure,
+                "only_key_frames": s.only_key_frames,
+                "use_shared_mem": s.use_shared_mem,
+                "server_message": resp.message  # CheckResponse 里的提示信息
             }
-        except grpc.RpcError:
+        except grpc.RpcError as e:
+            logging.error(f"检查流状态异常: {e.details()}")
             return None
 
 

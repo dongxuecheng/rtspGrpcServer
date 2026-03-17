@@ -145,6 +145,7 @@ namespace FFHDDemuxer
         int get_bit_depth() override { return m_nBitDepth; }
         int get_frame_size() { return m_nWidth * (m_nHeight + m_nChromaHeight) * m_nBPP; }
 
+
         void get_extra_data(uint8_t **ppData, int *bytes) override
         {
             if (m_fmtc && m_iVideoStream >= 0)

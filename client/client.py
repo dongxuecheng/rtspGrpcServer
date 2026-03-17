@@ -76,6 +76,7 @@ def example_poll_frame():
             if frame_seq != -1:
                 print(f"获取帧成功, 序列号: {frame_seq}")
                 cv2.imwrite("capture.jpg", frame)
+                break
             else:
                 status = client.get_stream_status(stream_id)
                 if status == STATUS_DISCONNECTED or status == STATUS_NOT_FOUND:
@@ -83,7 +84,7 @@ def example_poll_frame():
                     break
                 print(f"获取帧失败, 状态: {STATUS_NAMES[status]}")
                 
-        client.stop_stream(stream_id)
+        # client.stop_stream(stream_id)
         print("流已停止")
 
 
@@ -140,6 +141,6 @@ def example_stream_frames():
 if __name__ == "__main__":
     # 运行示例 (取消注释需要运行的示例)
     
-    # example_list_streams()
+    example_list_streams()
     example_poll_frame()
     # example_stream_frames()

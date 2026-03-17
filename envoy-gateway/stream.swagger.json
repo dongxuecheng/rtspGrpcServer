@@ -288,29 +288,11 @@
     "streamingserviceCheckResponse": {
       "type": "object",
       "properties": {
-        "status": {
-          "$ref": "#/definitions/streamingserviceStreamStatus"
+        "stream": {
+          "$ref": "#/definitions/streamingserviceStreamInfo"
         },
         "message": {
           "type": "string"
-        },
-        "rtspUrl": {
-          "type": "string"
-        },
-        "decoderType": {
-          "$ref": "#/definitions/streamingserviceDecoderType"
-        },
-        "width": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "height": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "decodeIntervalMs": {
-          "type": "integer",
-          "format": "int32"
         }
       }
     },
@@ -428,28 +410,48 @@
       "type": "object",
       "properties": {
         "streamId": {
-          "type": "string"
+          "type": "string",
+          "title": "流 ID"
         },
         "rtspUrl": {
-          "type": "string"
+          "type": "string",
+          "title": "RTSP 地址"
         },
         "status": {
-          "$ref": "#/definitions/streamingserviceStreamStatus"
+          "$ref": "#/definitions/streamingserviceStreamStatus",
+          "title": "连接状态"
         },
         "decoderType": {
-          "$ref": "#/definitions/streamingserviceDecoderType"
+          "$ref": "#/definitions/streamingserviceDecoderType",
+          "title": "解码器类型"
         },
         "width": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "title": "视频宽度"
         },
         "height": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "title": "视频高度"
         },
         "decodeIntervalMs": {
           "type": "integer",
+          "format": "int32",
+          "title": "解码间隔"
+        },
+        "heartbeatTimeoutMs": {
+          "type": "integer",
           "format": "int32"
+        },
+        "keepOnFailure": {
+          "type": "boolean"
+        },
+        "onlyKeyFrames": {
+          "type": "boolean"
+        },
+        "useSharedMem": {
+          "type": "boolean"
         }
       }
     },

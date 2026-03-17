@@ -30,6 +30,8 @@ public:
     // GPU ID
     int getGpuId() const { return gpu_id_; }
 
+    bool onlyKeyFrames() const override { return only_key_frames_; }
+
 private:
     std::shared_ptr<FFHDDemuxer::FFmpegDemuxer> demuxer_;
     std::shared_ptr<FFHDDecoder::CUVIDDecoder> decoder_;

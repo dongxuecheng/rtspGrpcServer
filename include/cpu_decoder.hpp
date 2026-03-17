@@ -29,6 +29,7 @@ public:
     // CPU 帧属性 (覆写基类方法以声明身份)
     bool isGpuFrame() const override { return false; }
     uint8_t* getGpuFramePtr() override { return nullptr; }
+    bool onlyKeyFrames() const override { return only_key_frames_; }
 
 private:
     bool reconnect(); // 重连辅助函数

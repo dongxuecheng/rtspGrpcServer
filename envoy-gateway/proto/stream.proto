@@ -110,31 +110,30 @@ message FrameResponse {
     int32 frame_seq = 4;
 }
 
+message ListStreamsRequest {
+}
+
+message StreamInfo {
+    string stream_id = 1;          // 流 ID
+    string rtsp_url = 2;           // RTSP 地址
+    StreamStatus status = 3;       // 连接状态
+    DecoderType decoder_type = 4;  // 解码器类型
+    int32 width = 5;               // 视频宽度
+    int32 height = 6;              // 视频高度
+    int32 decode_interval_ms = 7;  // 解码间隔
+    int32 heartbeat_timeout_ms = 8;
+    bool keep_on_failure = 9;
+    bool only_key_frames = 10;
+    bool use_shared_mem = 11;
+}
+
 message CheckRequest {
     string stream_id = 1;
 }
 
 message CheckResponse {
-    StreamStatus status = 1;   
-    string message = 2;        
-    string rtsp_url = 3;       
-    DecoderType decoder_type = 4;  
-    int32 width = 5;           
-    int32 height = 6;          
-    int32 decode_interval_ms = 7;  
-}
-
-message ListStreamsRequest {
-}
-
-message StreamInfo {
-    string stream_id = 1;          
-    string rtsp_url = 2;           
-    StreamStatus status = 3;       
-    DecoderType decoder_type = 4;  
-    int32 width = 5;               
-    int32 height = 6;              
-    int32 decode_interval_ms = 7;  
+    StreamInfo stream = 1;
+    string message = 2;
 }
 
 message ListStreamsResponse {
