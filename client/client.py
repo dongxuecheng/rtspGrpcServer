@@ -115,16 +115,12 @@ def example_stream_frames():
         else:
             print("连接成功")
 
-        frame_count = 0
         start = time.time()
         
-        for ret, frame in client.stream_frames(stream_id, max_fps=10):
-            if 3 == frame_count:
-                client.update_stream_url_isolated(stream_id, "rtsp://admin:lww123456@172.16.22.16:554/Streaming/Channels/901")
-            if ret:
-                frame_count += 1
-                print(f"接收帧: {frame_count}")
-                cv2.imwrite(f"images/capture_{frame_count}.jpg", frame)
+        for seq, frame in client.stream_frames(stream_id, max_fps=10):
+            if seq != -1:
+                print(f"接收帧: {seq}")
+                cv2.imwrite(f"images/capture_{seq}.jpg", frame)
             else:
                 status = client.get_stream_status(stream_id)
                 if status in (STATUS_DISCONNECTED, STATUS_NOT_FOUND):
@@ -133,8 +129,8 @@ def example_stream_frames():
                 else:
                     print(f"接收帧失败, 状态: {STATUS_NAMES[status]}")
         
-        fps = frame_count / (time.time() - start)
-        print(f"\n接收 {frame_count} 帧, 平均 {fps:.1f} FPS")
+        fps = seq / (time.time() - start)
+        print(f"\n接收 {seq} 帧, 平均 {fps:.1f} FPS")
         client.stop_stream(stream_id)
         print("流已停止")
 
