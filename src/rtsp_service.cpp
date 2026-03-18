@@ -322,8 +322,6 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
         info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
         info->set_keep_on_failure(task->shouldKeepOnFailure());
 
-        // 处理状态文字（如果 proto 中没有 message 字段，建议在 proto 添加 string message = 12;）
-        // 假设你在 StreamInfo 中添加了 string message 字段：
         switch (task->getStatus()) {
             case StreamStatus::CONNECTED:    response->set_message("已连接"); break;
             case StreamStatus::CONNECTING:   response->set_message("连接中"); break;
@@ -356,6 +354,10 @@ grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const st
         stream_info->set_width(task->getWidth());
         stream_info->set_height(task->getHeight());
         stream_info->set_decode_interval_ms(task->getDecodeIntervalMs());
+        stream_info->set_only_key_frames(task->onlyKeyFrames());
+        stream_info->set_use_shared_mem(task->usesSharedMemory()); 
+        stream_info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
+        stream_info->set_keep_on_failure(task->shouldKeepOnFailure());
     }
     return grpc::Status::OK;
 }

@@ -39,6 +39,9 @@ def example_list_streams():
             print(f"  状态:   {s['status_name']}")
             print(f"  解码器: {s['decoder_type']}")
             print(f"  分辨率: {s['width']}x{s['height']}")
+            print(f"  解码间隔：{s['decode_interval_ms']}")
+            print(f"  心跳时间：{s['heartbeat_timeout_ms']}")
+            print(f"  仅关键帧：{s['only_key_frames']}")
             print()
 
 
@@ -96,7 +99,7 @@ def example_stream_frames():
     
     with RemoteCapture(SERVER) as client:
         # 启动流
-        stream_id = client.start_stream(RTSP_URL, decoder_type=DECODER_CPU_FFMPEG, gpu_id=0, only_key_frames=False)
+        stream_id = client.start_stream(RTSP_URL, decoder_type=DECODER_CPU_FFMPEG, gpu_id=0, only_key_frames=True)
         # stream_id = "50fdcc9dd42e15f7"
         if not stream_id:
             return
