@@ -135,6 +135,16 @@ namespace FFHDDecoder
 
         int decode(const uint8_t *pData, int nSize, int64_t nTimestamp = 0) override
         {
+            // decode() 与 get_frame() 可能分别运行在 IO 线程和计算线程。
+            // NVDEC 回调（handleVideoSequence / handlePictureDisplay）会在 cuvidParseVideoData
+            // 调用期间同步修改 m_hDecoder、m_vpFrame、m_nDecodedFrame 等状态，因此需要互斥。
+            std::lock_guard<std::mutex> lk(m_lock);
+
+            // 持久错误状态：一旦 NVDEC 会话创建 / 显存分配等硬错误发生，
+            // 后续 decode 直接返回 -1，由上层 release 后重连，不再无限喂包
+            if (m_bDecodeError)
+                return -1;
+
             m_nDecodedFrame = 0;
             m_nDecodedFrameReturned = 0;
             CUVIDSOURCEDATAPACKET packet = {0};
@@ -151,12 +161,23 @@ namespace FFHDDecoder
             {
                 CUDATools::AutoDevice auto_device_exchange(m_gpuID);
                 if (!checkCudaDriver(cuvidParseVideoData(m_hParser, &packet)))
+                {
+                    // 回调内已置位错误标志的是硬错误，直接报错；
+                    // 否则视为解析器损坏（通常由回调中止序列导致），同样按硬错误处理
+                    m_bDecodeError = true;
                     return -1;
+                }
             }
             catch (...)
             {
+                // 回调抛出的异常均为不可恢复错误（不支持的 codec / 分辨率超限等）
+                m_bDecodeError = true;
                 return -1;
             }
+
+            // 回调中发生的硬错误（cuvidCreateDecoder / cudaMalloc 失败等）统一转换为 -1
+            if (m_bDecodeError)
+                return -1;
             return m_nDecodedFrame;
         }
 
@@ -343,7 +364,16 @@ namespace FFHDDecoder
                 m_pBGRFrame = 0;
             }
 
-            checkCudaDriver(cuvidCreateDecoder(&m_hDecoder, &videoDecodeCreateInfo));
+            if (!checkCudaDriver(cuvidCreateDecoder(&m_hDecoder, &videoDecodeCreateInfo)))
+            {
+                // NVDEC 会话创建失败（并发会话超限 / 显存不足 / 引擎资源耗尽）：
+                // 返回 0 让 parser 中止本序列，并置位持久错误标志，
+                // decode() 将返回 -1，上层 StreamTask 会 release 后指数退避重连，
+                // 避免在坏掉的解码器上空转喂包
+                m_hDecoder = nullptr;
+                m_bDecodeError = true;
+                return 0;
+            }
             return nDecodeSurface;
         }
 
@@ -352,11 +382,17 @@ namespace FFHDDecoder
 
             if (!m_hDecoder)
             {
-                throw std::runtime_error("Decoder not initialized.");
-                return false;
+                // 解码会话未创建成功时不抛异常（异常需穿过 C 库栈帧，行为不可靠），
+                // 置位持久错误标志，由 decode() 返回 -1 通知上层重连
+                m_bDecodeError = true;
+                return 0;
             }
             m_nPicNumInDecodeOrder[pPicParams->CurrPicIdx] = m_nDecodePicCnt++;
-            checkCudaDriver(cuvidDecodePicture(m_hDecoder, pPicParams));
+            if (!checkCudaDriver(cuvidDecodePicture(m_hDecoder, pPicParams)))
+            {
+                m_bDecodeError = true;
+                return 0;
+            }
             return 1;
         }
 
@@ -371,8 +407,13 @@ namespace FFHDDecoder
 
             CUdeviceptr dpSrcFrame = 0;
             unsigned int nSrcPitch = 0;
-            checkCudaDriver(cuvidMapVideoFrame(m_hDecoder, pDispInfo->picture_index, &dpSrcFrame,
-                                               &nSrcPitch, &videoProcessingParameters));
+            if (!checkCudaDriver(cuvidMapVideoFrame(m_hDecoder, pDispInfo->picture_index, &dpSrcFrame,
+                                                    &nSrcPitch, &videoProcessingParameters)))
+            {
+                // 映射失败说明解码会话/显存状态异常，按硬错误处理
+                m_bDecodeError = true;
+                return 0;
+            }
 
             CUVIDGETDECODESTATUS DecodeStatus;
             memset(&DecodeStatus, 0, sizeof(DecodeStatus));
@@ -404,11 +445,22 @@ namespace FFHDDecoder
                     if (need_alloc)
                     {
                         uint8_t *pFrame = nullptr;
+                        bool alloc_ok;
                         if (m_bUseDeviceFrame)
-                            // checkCudaDriver(cuMemAlloc((CUdeviceptr *)&pFrame, get_frame_bytes()));
-                            checkCudaRuntime(cudaMalloc(&pFrame, get_frame_bytes()));
+                            // alloc_ok = checkCudaDriver(cuMemAlloc((CUdeviceptr *)&pFrame, get_frame_bytes()));
+                            alloc_ok = checkCudaRuntime(cudaMalloc(&pFrame, get_frame_bytes()));
                         else
-                            checkCudaRuntime(cudaMallocHost(&pFrame, get_frame_bytes()));
+                            alloc_ok = checkCudaRuntime(cudaMallocHost(&pFrame, get_frame_bytes()));
+
+                        if (!alloc_ok)
+                        {
+                            // 帧缓冲分配失败（显存/锁页内存耗尽）：撤销计数并置位错误标志，
+                            // 避免 nullptr 进入帧缓存导致后续拷贝崩溃；decode() 将返回 -1
+                            --m_nDecodedFrame;
+                            m_bDecodeError = true;
+                            checkCudaDriver(cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame));
+                            return 0;
+                        }
 
                         m_vpFrame.push_back(pFrame);
                         m_vTimestamp.push_back(0);
@@ -422,11 +474,23 @@ namespace FFHDDecoder
             {
                 if (m_pYUVFrame == 0)
                 {
-                    checkCudaDriver(cuMemAlloc(&m_pYUVFrame, m_nWidth * (m_nLumaHeight + m_nChromaHeight * m_nNumChromaPlanes) * m_nBPP));
+                    if (!checkCudaDriver(cuMemAlloc(&m_pYUVFrame, m_nWidth * (m_nLumaHeight + m_nChromaHeight * m_nNumChromaPlanes) * m_nBPP)))
+                    {
+                        m_pYUVFrame = 0;
+                        m_bDecodeError = true;
+                        checkCudaDriver(cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame));
+                        return 0;
+                    }
                 }
                 if (m_pBGRFrame == 0)
                 {
-                    checkCudaDriver(cuMemAlloc(&m_pBGRFrame, m_nWidth * m_nLumaHeight * 3));
+                    if (!checkCudaDriver(cuMemAlloc(&m_pBGRFrame, m_nWidth * m_nLumaHeight * 3)))
+                    {
+                        m_pBGRFrame = 0;
+                        m_bDecodeError = true;
+                        checkCudaDriver(cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame));
+                        return 0;
+                    }
                 }
                 CUDA_MEMCPY2D m = {0};
                 m.srcMemoryType = CU_MEMORYTYPE_DEVICE;
@@ -530,6 +594,7 @@ namespace FFHDDecoder
 
         uint8_t *get_frame(int64_t *pTimestamp = nullptr, unsigned int *pFrameIndex = nullptr) override
         {
+            std::lock_guard<std::mutex> lk(m_lock);
             if (m_nDecodedFrame > 0)
             {
                 if (pFrameIndex)
@@ -637,6 +702,9 @@ namespace FFHDDecoder
         unsigned int m_nMaxWidth = 0, m_nMaxHeight = 0;
         bool m_output_bgr = true;
         bool m_bSynced = false; // 用于延迟同步的标志
+        // NVDEC 侧硬错误标志：会话创建/显存分配/解析失败时置位，
+        // decode() 据此返回 -1，驱动上层 release + 重连，而非无限喂包
+        bool m_bDecodeError = false;
     };
 
     std::shared_ptr<CUVIDDecoder> create_cuvid_decoder(

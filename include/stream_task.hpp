@@ -92,6 +92,12 @@ private:
     void markConnectionFailure();
     bool shouldGiveUpReconnection();
 
+    // 首帧宽限期：open 成功后的一段时间内，grab/demux 临时失败不视为连接中断，
+    // 避免摄像头刚 PLAY 后第一帧（尤其关键帧）尚未到达就触发重连。
+    static constexpr int FIRST_FRAME_GRACE_PERIOD_MS = 30000; // 30 秒
+    bool inFirstFrameGracePeriod() const;
+    void resetFirstFrameState();
+
     // --- 异步调度逻辑 ---
 
     // 调度下一步操作
@@ -175,6 +181,10 @@ private:
     int consecutive_failures_ = 0;
     std::chrono::steady_clock::time_point first_failure_time_;
     std::chrono::steady_clock::time_point last_encode_time_;
+
+    // 首帧容忍相关
+    std::chrono::steady_clock::time_point first_grab_attempt_time_;
+    std::atomic<bool> first_frame_seen_{false};
 
     // 优化：休眠控制相关
     std::mutex sleep_mutex_;

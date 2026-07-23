@@ -4,6 +4,7 @@
 #include "turbojpeg_encoder.hpp"
 #include <chrono>
 #include <thread>
+#include <random>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
 #include "stream_service.pb.h"
@@ -101,6 +102,7 @@ StreamTask::StreamTask(const std::string &url,
     frame_pool_ = FrameMemoryPool::create(3 * 1024 * 1024);
     updateHeartbeat();
     last_encode_time_ = std::chrono::steady_clock::now();
+    first_grab_attempt_time_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
 
 #ifdef RTSP_ENABLE_CUDA
     // 为每路 GPU 流创建独立的 CUDA Stream
@@ -277,7 +279,8 @@ void StreamTask::start()
     stopped_ = false;
     status_ = StreamStatus::CONNECTING;
     consecutive_failures_ = 0;
-    spdlog::info("StreamTask started: {}", url_);
+    resetFirstFrameState();
+    spdlog::info("StreamTask started: {} (first-frame grace period: {} ms)", url_, FIRST_FRAME_GRACE_PERIOD_MS);
 
     std::weak_ptr<StreamTask> weak_self = shared_from_this();
     io_thread_ = std::thread([weak_self](){
@@ -361,6 +364,7 @@ void StreamTask::stop()
     status_ = StreamStatus::DISCONNECTED;
     connected_ = false;
     consecutive_failures_ = 0;
+    resetFirstFrameState();
 }
 
 void StreamTask::scheduleNext(int force_delay_ms)
@@ -471,6 +475,9 @@ void StreamTask::stepIO()
             consecutive_failures_ = 0;
             // 连接成功后，重置编码时间，准备立即出第一帧
             last_encode_time_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            // 记录首次尝试抓取的时间，用于首帧宽限期判断
+            first_grab_attempt_time_ = std::chrono::steady_clock::now();
+            first_frame_seen_.store(false, std::memory_order_release);
         }
         else
         {
@@ -489,6 +496,20 @@ void StreamTask::stepIO()
     auto grab_start = std::chrono::steady_clock::now();
     if (!decoder_->grab())
     {
+        // 首帧宽限期：open 成功后的一段时间内，grab/demux 临时失败通常只是摄像头还没出帧，
+        // 特别是关键帧模式或高并发时。此时不应记为连接失败，而是继续尝试读取。
+        if (!first_frame_seen_.load(std::memory_order_acquire) && inFirstFrameGracePeriod())
+        {
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - first_grab_attempt_time_)
+                                  .count();
+            spdlog::warn("Frame grab failed during first-frame grace period: {} (elapsed={} ms, first_frame_seen={}, connected={}), retrying...",
+                         url_, elapsed_ms, first_frame_seen_.load(std::memory_order_acquire), connected_);
+            lock.unlock();
+            scheduleNext(100); // 短暂重试，不增加 failure 计数，不 release decoder
+            return;
+        }
+
         spdlog::warn("Frame grab failed: {}", url_);
         markConnectionFailure();
 
@@ -512,6 +533,10 @@ void StreamTask::stepIO()
         return;
     }
     auto grab_end = std::chrono::steady_clock::now();
+
+    // 成功拿到第一帧后，标记首帧已到达
+    bool expected = false;
+    first_frame_seen_.compare_exchange_strong(expected, true);
 
     connected_ = true;
     status_ = StreamStatus::CONNECTED;
@@ -542,6 +567,14 @@ void StreamTask::stepIO()
 
     if (should_process)
     {
+        // 投递任务前再检查一次 running_，避免 stop() 已经调用后还往线程池塞任务。
+        if (!running_.load(std::memory_order_acquire))
+        {
+            lock.unlock();
+            spdlog::debug("[stepIO] Task stopped before enqueue, skipping compute");
+            return;
+        }
+
         // 需要解码：释放锁，将任务派发给计算线程池
         lock.unlock();
         spdlog::debug("[stepIO] Enqueueing stepCompute to pool gpu_id={}", gpu_id_);
@@ -552,7 +585,17 @@ void StreamTask::stepIO()
                 auto self = weak_self.lock();
                 if (!self)
                 {
-                    spdlog::warn("[stepCompute] weak_ptr expired, task destroyed before compute");
+                    // 任务入队后、执行前 StreamTask 已被正常释放（如 Ctrl+C 停止流），
+                    // 这是预期行为，用 debug 级别避免停止时刷屏。
+                    spdlog::debug("[stepCompute] weak_ptr expired, task destroyed before compute");
+                    return;
+                }
+
+                // 任务开始执行时 task 仍在，但可能已经被 stop() 标记为 not running。
+                // 直接返回，避免在关闭期间做无意义的编码/写 SHM。
+                if (!self->running_.load(std::memory_order_acquire))
+                {
+                    spdlog::debug("[stepCompute] Task already stopped, skipping compute");
                     return;
                 }
 
@@ -724,12 +767,24 @@ int StreamTask::calculateReconnectDelayMs() const
     if (consecutive_failures_ <= 0)
         return 100;
     int shift = std::min(consecutive_failures_ - 1, 6); // 2^6 = 64
-    int delay = 500 * (1 << shift);
-    return std::min(delay, 30000);
+    int delay = std::min(500 * (1 << shift), 30000);
+
+    // 加 ±25% 随机抖动：大量流同时失败时，确定性退避会让它们按完全相同的
+    // 节拍重连，而 NVDEC 会话创建在驱动内是串行的，同步重试会反复形成创建风暴
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<double> jitter(0.75, 1.25);
+    return static_cast<int>(delay * jitter(rng));
 }
 
 void StreamTask::markConnectionFailure()
 {
+    // 首帧宽限期内不累计连接失败，避免摄像头尚未出帧就被判定为断线。
+    if (!first_frame_seen_.load(std::memory_order_acquire) && inFirstFrameGracePeriod())
+    {
+        spdlog::debug("markConnectionFailure skipped during first-frame grace period: {}", url_);
+        return;
+    }
+
     connected_ = false;
     // 失败不代表彻底断开，服务端仍在指数退避重连，因此状态保持 CONNECTING。
     // 只有 shouldGiveUpReconnection() 决定停止时，stop() 才会把状态设为 DISCONNECTED。
@@ -752,6 +807,20 @@ bool StreamTask::shouldGiveUpReconnection()
                           .count();
     constexpr int64_t MAX_OFFLINE_MS = 60000; // 60s
     return elapsed_ms > MAX_OFFLINE_MS;
+}
+
+bool StreamTask::inFirstFrameGracePeriod() const
+{
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - first_grab_attempt_time_)
+                          .count();
+    return elapsed_ms <= FIRST_FRAME_GRACE_PERIOD_MS;
+}
+
+void StreamTask::resetFirstFrameState()
+{
+    first_grab_attempt_time_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    first_frame_seen_.store(false, std::memory_order_release);
 }
 
 bool StreamTask::getLatestEncodedFrame(std::shared_ptr<std::string> &out_buffer)

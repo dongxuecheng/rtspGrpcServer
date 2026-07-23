@@ -5,6 +5,8 @@
 #include <atomic>
 #include <csignal>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -37,21 +39,44 @@ extern "C" void signalHandler(int signum)
     g_shutdown_requested.store(true);
 }
 
+// 服务版本号：升版本只需修改这一处，banner 会自动居中显示
+constexpr char kServerVersion[] = "1.5.0";
+
 void display_banner()
 {
-    // ANSI color codes for bright cyan and reset
+    // ANSI 颜色：亮青主标题、亮白副标题、灰色分隔线、亮黄版本号
     const char *CYAN = "\033[1;36m";
+    const char *WHITE = "\033[1;37m";
+    const char *GRAY = "\033[90m";
+    const char *YELLOW = "\033[1;33m";
     const char *RESET = "\033[0m";
+
     printf("%s", CYAN);
-    printf("%s\n", " ██████╗ ██████╗ ██████╗  ██████╗    ██████╗ ████████╗███████╗██████╗ ");
-    printf("%s\n", "██╔════╝ ██╔══██╗██╔══██╗██╔════╝    ██╔══██╗╚══██╔══╝██╔════╝██╔══██╗");
-    printf("%s\n", "██║  ███╗██████╔╝██████╔╝██║         ██████╔╝   ██║   ███████╗██████╔╝");
-    printf("%s\n", "██║   ██║██╔══██╗██╔═══╝ ██║         ██╔══██╗   ██║   ╚════██║██╔═══╝ ");
-    printf("%s\n", "╚██████╔╝██║  ██║██║     ╚██████╗    ██║  ██║   ██║   ███████║██║     ");
-    printf("%s\n", " ╚═════╝ ╚═╝  ╚═╝╚═╝      ╚═════╝    ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝     ");
-    printf("%s\n", "                                 v1.4                                 ");
-    printf("%s\n", RESET);
-    printf("%s\n", "                                                                      ");
+    printf("%s\n", R"(  ██████╗ ██████╗ ██████╗  ██████╗     ██████╗ ████████╗███████╗██████╗)");
+    printf("%s\n", R"( ██╔════╝ ██╔══██╗██╔══██╗██╔════╝     ██╔══██╗╚══██╔══╝██╔════╝██╔══██╗)");
+    printf("%s\n", R"( ██║  ███╗██████╔╝██████╔╝██║          ██████╔╝   ██║   ███████╗██████╔╝)");
+    printf("%s\n", R"( ██║   ██║██╔══██╗██╔═══╝ ██║          ██╔══██╗   ██║   ╚════██║██╔═══╝)");
+    printf("%s\n", R"( ╚██████╔╝██║  ██║██║     ╚██████╗     ██║  ██║   ██║   ███████║██║)");
+    printf("%s\n", R"(  ╚═════╝ ╚═╝  ╚═╝╚═╝      ╚═════╝     ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝)");
+    printf("%s", RESET);
+    printf("\n");
+    printf("%s                         RTSP Streaming Server%s\n", WHITE, RESET);
+    printf("%s                 ─────────────────────────────────────%s\n", GRAY, RESET);
+
+    // 版本行随 kServerVersion 变化，按 72 列画布自动居中（内容限 ASCII 字符）
+    // 特性行随构建类型自适应：GPU 构建含 NVDEC/NVJPEG 加速，CPU-only 构建仅 CPU
+#ifdef RTSP_ENABLE_CUDA
+    const char *features = "CPU + GPU (NVDEC/NVJPEG)";
+#else
+    const char *features = "CPU Only";
+#endif
+    char version_line[128];
+    snprintf(version_line, sizeof(version_line), "v%s | %s", kServerVersion, features);
+    int pad = (72 - static_cast<int>(strlen(version_line))) / 2;
+    if (pad < 0)
+        pad = 0;
+    printf("%s%*s%s%s\n", YELLOW, pad, "", version_line, RESET);
+    printf("\n");
 }
 
 // 配置日志系统
@@ -148,9 +173,12 @@ int main(int argc, char **argv)
         server_address = argv[1];
     }
 
-    // 3. 【解除注释并修改】初始化所有 CUDA 卡的低 CPU 占用标志
-    // 必须在启动任何解码器之前调用
-    // initCudaDevices();
+    // 3. 初始化所有 CUDA 卡（BlockingSync 低 CPU 占用同步模式）
+    // 必须在创建任何解码器/线程池之前调用，否则默认的自旋同步
+    // 会让上百个 IO/计算线程在 cuStreamSynchronize 上空转烧满 CPU
+#ifdef RTSP_ENABLE_CUDA
+    initCudaDevices();
+#endif
 
     // 4. 初始化全局线程池 (TaskScheduler)
     unsigned int hardware_threads = std::thread::hardware_concurrency();

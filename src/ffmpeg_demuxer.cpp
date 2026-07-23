@@ -58,6 +58,25 @@ namespace FFHDDemuxer
         return true;
     }
 
+    static void set_rtsp_options(AVDictionary **options, const string &uri)
+    {
+        if (!options || !string_begin_with_ci(uri, "rtsp://"))
+            return;
+
+        av_dict_set(options, "rtsp_transport", "tcp", 0);
+        av_dict_set(options, "buffer_size", "16777216", 0); // 16MB 底层网络缓冲
+        av_dict_set(options, "stimeout", "20000000", 0);     // 20 秒超时（微秒）
+
+        // 增大初始探测窗口，避免 MPEG4/Hikvision 这类设备在开流初期丢头部信息
+        av_dict_set(options, "probesize", "16777216", 0);
+        av_dict_set(options, "analyzeduration", "20000000", 0);
+
+        // 降低网络抖动造成的丢包/延迟积压
+        av_dict_set(options, "fflags", "nobuffer", 0);
+        av_dict_set(options, "flags", "low_delay", 0);
+        av_dict_set(options, "max_delay", "500000", 0);
+    }
+
     class FFmpegDemuxerImpl : public FFmpegDemuxer
     {
     public:
@@ -312,7 +331,14 @@ namespace FFHDDemuxer
 
             this->m_fmtc = fmtc;
 
-            if (!checkFFMPEG(avformat_find_stream_info(fmtc, nullptr)))
+            AVDictionary *info_options = nullptr;
+            set_rtsp_options(&info_options, this->uri_opened_);
+            int stream_info_ret = avformat_find_stream_info(fmtc, &info_options);
+            if (info_options)
+            {
+                av_dict_free(&info_options);
+            }
+            if (!checkFFMPEG(stream_info_ret))
                 return false;
 
             m_iVideoStream = av_find_best_stream(fmtc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
@@ -446,21 +472,7 @@ namespace FFHDDemuxer
         AVFormatContext *CreateFormatContext(const string &uri)
         {
             AVDictionary *options = nullptr;
-            if (string_begin_with_ci(uri, "rtsp://"))
-            {
-                av_dict_set(&options, "rtsp_transport", "tcp", 0);
-                av_dict_set(&options, "buffer_size", "10485760", 0); // 10MB 底层网络防抖缓存
-                av_dict_set(&options, "stimeout", "10000000", 0);     // 10秒超时 (单位: 微秒)
-
-                // 【探测参数】
-                // 5MB - 足够容纳高清 HEVC 的大关键帧，提高兼容性
-                av_dict_set(&options, "probesize", "5242880", 0);
-                av_dict_set(&options, "analyzeduration", "10000000", 0); // 最多探测 10 秒
-                // 减少分析过程中的多余丢包等待
-                // av_dict_set(&options, "flags", "low_delay", 0);
-                // // 如果你只需要视频不要音频，直接告诉 FFmpeg 别去花时间找音频流了
-                // av_dict_set(&options, "allowed_media_types", "video", 0);
-            }
+            set_rtsp_options(&options, uri);
 
             AVFormatContext *ctx = nullptr;
             int ret = avformat_open_input(&ctx, uri.c_str(), nullptr, &options);
