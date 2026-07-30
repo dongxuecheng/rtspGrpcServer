@@ -133,16 +133,9 @@ StreamTask::StreamTask(const std::string &url,
 
     if (use_shared_mem_)
     {
-        try
-        {
-            shm_channel_ = std::make_unique<ZeroCopyChannel>(stream_id_, 0); // 生产者角色
-            spdlog::info("SharedMemory enabled for stream: {}", stream_id_);
-        }
-        catch (const std::exception &e)
-        {
-            spdlog::error("Failed to init SHM: {}", e.what());
-            use_shared_mem_ = false;
-        }
+        // SHM 延迟到首次解码成功后创建，因为那时才知道实际帧分辨率
+        // 每个流独立分配，互不影响
+        spdlog::info("SharedMemory requested for stream: {} (will init after first frame)", stream_id_);
     }
 }
 
@@ -665,25 +658,31 @@ void StreamTask::stepCompute()
     bool frame_ready = false;
     
     // === 分支 1: 共享内存模式 -> 直接传原始 Mat ===
-    if (use_shared_mem_ && shm_channel_)
+    if (use_shared_mem_)
     {
-        // 注意：SHM 模式下不要在服务端自己 keepAlive，否则心跳永远不失效
-        // 客户端应通过 gRPC CheckStream / isOpened() 来维持心跳
-        // 直接获取解码后的 Mat (GPU/CPU 自适应)
         bool retrieved = decoder_->retrieve(reusable_frame_, true);
-        // spdlog::info("SHM retrieve frame: {}, retrieved={}, size={}B", url_, retrieved, 
-        //               reusable_frame_.empty() ? 0 : (reusable_frame_.total() * reusable_frame_.elemSize()));
         if (retrieved && !reusable_frame_.empty())
         {
-            // 使用 grab 时记录的时间戳，与 gRPC 路径保持一致
-            if (shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_))
+            // 首次解码成功后，按实际帧分辨率创建 SHM
+            if (!shm_channel_)
+            {
+                size_t frame_bytes = reusable_frame_.total() * reusable_frame_.elemSize();
+                try
+                {
+                    shm_channel_ = std::make_unique<ZeroCopyChannel>(stream_id_, 0, frame_bytes);
+                    spdlog::info("SharedMemory initialized for stream: {} ({}x{}x{}, {} bytes/slot)",
+                                 stream_id_, reusable_frame_.cols, reusable_frame_.rows,
+                                 reusable_frame_.channels(), frame_bytes);
+                }
+                catch (const std::exception &e)
+                {
+                    spdlog::error("Failed to init SHM for stream {}: {}", stream_id_, e.what());
+                }
+            }
+
+            if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_))
             {
                 frame_ready = true;
-                // 可选：更新统计信息
-                // spdlog::info("SHM frame written: {}x{}@{}ch, size={}B", 
-                //               reusable_frame_.cols, reusable_frame_.rows,
-                //               reusable_frame_.channels(), 
-                //               reusable_frame_.total() * reusable_frame_.elemSize());
             }
         }
     }

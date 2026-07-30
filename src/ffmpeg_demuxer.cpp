@@ -333,7 +333,7 @@ namespace FFHDDemuxer
 
             AVDictionary *info_options = nullptr;
             set_rtsp_options(&info_options, this->uri_opened_);
-            int stream_info_ret = avformat_find_stream_info(fmtc, &info_options);
+            int stream_info_ret = avformat_find_stream_info(fmtc, nullptr);
             if (info_options)
             {
                 av_dict_free(&info_options);
@@ -342,23 +342,30 @@ namespace FFHDDemuxer
                 return false;
 
             m_iVideoStream = av_find_best_stream(fmtc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-            if (m_iVideoStream < 0)
+            if (m_iVideoStream < 0 || m_iVideoStream >= fmtc->nb_streams)
             {
-                INFOE("FFmpeg error: Could not find video stream in input file");
+                INFOE("FFmpeg error: Could not find a valid video stream in input file");
+                return false;
+            }
+
+            AVStream *video_stream = fmtc->streams[m_iVideoStream];
+            if (!video_stream || !video_stream->codecpar)
+            {
+                INFOE("FFmpeg error: Video stream metadata is missing");
                 return false;
             }
 
             m_frameCount = 0;
-            m_eVideoCodec = fmtc->streams[m_iVideoStream]->codecpar->codec_id;
-            m_nWidth = fmtc->streams[m_iVideoStream]->codecpar->width;
-            m_nHeight = fmtc->streams[m_iVideoStream]->codecpar->height;
-            m_eChromaFormat = (AVPixelFormat)fmtc->streams[m_iVideoStream]->codecpar->format;
+            m_eVideoCodec = video_stream->codecpar->codec_id;
+            m_nWidth = video_stream->codecpar->width;
+            m_nHeight = video_stream->codecpar->height;
+            m_eChromaFormat = (AVPixelFormat)video_stream->codecpar->format;
 
-            AVRational rTimeBase = fmtc->streams[m_iVideoStream]->time_base;
+            AVRational rTimeBase = video_stream->time_base;
             m_timeBase = av_q2d(rTimeBase);
             m_userTimeScale = timeScale;
-            m_fps = r2d(fmtc->streams[m_iVideoStream]->avg_frame_rate);
-            m_total_frames = fmtc->streams[m_iVideoStream]->nb_frames;
+            m_fps = r2d(video_stream->avg_frame_rate);
+            m_total_frames = video_stream->nb_frames;
 
             switch (m_eChromaFormat)
             {
@@ -402,9 +409,11 @@ namespace FFHDDemuxer
                 m_nBPP = 1;
             }
 
-            m_bMp4H264 = m_eVideoCodec == AV_CODEC_ID_H264 && (!strcmp(fmtc->iformat->long_name, "QuickTime / MOV") || !strcmp(fmtc->iformat->long_name, "FLV (Flash Video)") || !strcmp(fmtc->iformat->long_name, "Matroska / WebM"));
-            m_bMp4HEVC = m_eVideoCodec == AV_CODEC_ID_HEVC && (!strcmp(fmtc->iformat->long_name, "QuickTime / MOV") || !strcmp(fmtc->iformat->long_name, "FLV (Flash Video)") || !strcmp(fmtc->iformat->long_name, "Matroska / WebM"));
-            m_bMp4MPEG4 = m_eVideoCodec == AV_CODEC_ID_MPEG4 && (!strcmp(fmtc->iformat->long_name, "QuickTime / MOV") || !strcmp(fmtc->iformat->long_name, "FLV (Flash Video)") || !strcmp(fmtc->iformat->long_name, "Matroska / WebM"));
+            const char *iformat_name = fmtc->iformat && fmtc->iformat->long_name ? fmtc->iformat->long_name : "unknown";
+            const bool is_mp4_like_container = !strcmp(iformat_name, "QuickTime / MOV") || !strcmp(iformat_name, "FLV (Flash Video)") || !strcmp(iformat_name, "Matroska / WebM");
+            m_bMp4H264 = m_eVideoCodec == AV_CODEC_ID_H264 && is_mp4_like_container;
+            m_bMp4HEVC = m_eVideoCodec == AV_CODEC_ID_HEVC && is_mp4_like_container;
+            m_bMp4MPEG4 = m_eVideoCodec == AV_CODEC_ID_MPEG4 && is_mp4_like_container;
 
             if (m_bMp4H264 || m_bMp4HEVC)
             {

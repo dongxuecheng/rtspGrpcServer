@@ -656,6 +656,7 @@ grpc::Status RTSPServiceImpl::GetShmLayout(grpc::ServerContext *context,
                                            const streamingservice::ShmLayoutRequest *request,
                                            streamingservice::ShmLayoutResponse *response)
 {
+    // 返回默认布局，作为 Python 获取不到流分辨率时的兜底
     auto info = getShmLayoutInfo();
     auto *layout = response->mutable_layout();
     layout->set_slot_count(info.slot_count);

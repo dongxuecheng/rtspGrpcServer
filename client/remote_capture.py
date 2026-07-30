@@ -167,6 +167,44 @@ class _NotifySemaphore:
             _libc.sem_close(self._sem)
             self._sem = None
 
+# 计算共享内存布局（与 C++ getShmLayoutInfo 保持一致）
+def _compute_shm_layout(max_frame_bytes: int) -> dict:
+    """根据单帧最大字节数计算完整的共享内存布局参数"""
+    SLOT_COUNT = 3
+    ALIGNMENT = 64
+    UINT64_SIZE = 8
+
+    # 元数据区大小（与 C++ sizeof(ShmFrameSlot) 一致）
+    # sequence(8) + meta(48) = 56, 但由于 alignas(64), sizeof = 64
+    # 但 payload_offset 使用 meta 实际结束偏移 = 8 + 48 = 56，而非 64
+    SEQ_OFFSET = 0
+    META_OFFSET = 8                                    # offsetof(ShmFrameSlot, meta)
+    META_DATA_SIZE = 4 * UINT64_SIZE + 4 * 4           # sizeof(ShmMeta) = 48
+    PAYLOAD_OFFSET = META_OFFSET + META_DATA_SIZE      # = 56
+
+    # 每个 slot 的总大小 = 元数据 + 最大帧数据，对齐到 64
+    raw_slot_size = PAYLOAD_OFFSET + max_frame_bytes
+    SLOT_SIZE = (raw_slot_size + ALIGNMENT - 1) & ~(ALIGNMENT - 1)
+
+    # head_idx 在所有 slot 之后
+    HEAD_IDX_OFFSET = SLOT_COUNT * SLOT_SIZE
+    # 总大小 = 所有 slot + head_idx（对齐到 8 字节）
+    TOTAL_SIZE = (HEAD_IDX_OFFSET + UINT64_SIZE + (UINT64_SIZE - 1)) & ~(UINT64_SIZE - 1)
+
+    return {
+        "slot_count": SLOT_COUNT,
+        "max_frame_bytes": max_frame_bytes,
+        "alignment": ALIGNMENT,
+        "slot_size": SLOT_SIZE,
+        "seq_offset": SEQ_OFFSET,
+        "meta_offset": META_OFFSET,
+        "payload_offset": PAYLOAD_OFFSET,
+        "meta_data_size": META_DATA_SIZE,
+        "head_idx_offset": HEAD_IDX_OFFSET,
+        "total_size": TOTAL_SIZE,
+    }
+
+
 class _ShmReader:
     """共享内存帧读取器（内部使用）"""
 
@@ -1029,10 +1067,23 @@ class RTSPClient(_BaseRTSPClient):
                 return None
             return reader
 
-        if self._shm_layout is None:
-            self._shm_layout = self.get_shm_layout()
+        # 按流独立计算共享内存布局 —— 每个流可能有不同分辨率，从而有不同的 max_frame_bytes
+        try:
+            info = self.check_stream(stream_id)
+            if info and info["width"] > 0 and info["height"] > 0:
+                # BGR 3 通道，加 25% 余量应对可能的 MicroBlock / 编码膨胀
+                frame_bytes = info["width"] * info["height"] * 3
+                max_frame_bytes = int(frame_bytes * 1.25)
+                shm_layout = _compute_shm_layout(max_frame_bytes)
+            else:
+                raise ValueError("Stream info has no valid dimensions")
+        except Exception as e:
+            logger.warning(f"[_get_shm_reader] 无法获取流分辨率，使用全局 GetShmLayout 兜底: {e}")
+            if self._shm_layout is None:
+                self._shm_layout = self.get_shm_layout()
+            shm_layout = self._shm_layout
 
-        reader = _ShmReader(stream_id, layout_info=self._shm_layout)
+        reader = _ShmReader(stream_id, layout_info=shm_layout)
         if not reader.exists():
             logger.error(
                 f"[RTSPClient] 未找到共享内存: /dev/shm/{stream_id}。"
