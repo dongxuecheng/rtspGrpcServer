@@ -191,6 +191,9 @@ SHM_HEAD_IDX_SIZE = 8                                          # sizeof(uint64_t
 # 兜底默认值：C++ 端 DEFAULT_SHM_FRAME_BYTES = 3 * 1920 * 1080
 SHM_FALLBACK_MAX_FRAME_BYTES = 3 * 1920 * 1080
 
+# ShmMeta.frame_flags 的位定义（与 C++ 端 zero_copy_channel.hpp 保持一致）
+SHM_FLAG_CORRUPTED = 1 << 0   # 该帧解码出错/花屏（缺参考帧、错误掩盖、码流非法）
+
 # 服务端“运行中扩容”的探测参数：
 # 帧变大（分辨率切换）时服务端会 unlink 旧 SHM 并创建新对象（新 inode），
 # 客户端手里的旧映射会永远冻结在最后一帧，所以必须在“一段时间没有新帧”后
@@ -308,6 +311,8 @@ class _ShmReader:
         # 通知信号量惰性重试状态
         self._next_sem_attach = 0.0
         self._polling_mode_logged = False
+        # 最近读到的这一帧是否花屏（由 meta.frame_flags 解析，逐帧更新）
+        self.last_frame_corrupted = False
 
     def _apply_layout(self, layout: dict) -> None:
         """应用布局中的动态部分"""
@@ -412,7 +417,9 @@ class _ShmReader:
         f = struct.unpack(unpack_format, raw)
         return {
             'size': f[0], 'w': f[1], 'h': f[2], 'ts': f[3],
-            'ch': f[4], 'depth': f[5], 'step': f[6], '_rsv': f[7]
+            'ch': f[4], 'depth': f[5], 'step': f[6],
+            # 第 8 个 uint32 是帧标志位（帧花屏等），由服务端 ShmMeta.frame_flags 写入
+            'flags': f[7], '_rsv': f[7]
         }
 
     def _rebuild_frame(self, raw_data, meta: dict) -> Optional[np.ndarray]:
@@ -466,38 +473,38 @@ class _ShmReader:
             logger.debug(f"grab error: {e}")
             return False
 
-    def retrieve(self) -> Tuple[Optional[np.ndarray], int]:
+    def retrieve(self) -> Tuple[Optional[np.ndarray], int, int]:
         if not self._shm_view:
-            return None, 0
+            return None, 0, 0
         try:
             # 【优化】直接使用 self.HEAD_IDX_OFFSET
             head_off = self.HEAD_IDX_OFFSET
             latest = self._read_u64(head_off)
             if latest is None or latest == self._last_idx:
-                return None, 0
+                return None, 0, 0
             slot_off = (latest % self.SLOT_COUNT) * self.SLOT_SIZE
             v1 = self._read_u64(slot_off + self.SEQ_OFFSET)
             if v1 is None or (v1 & 1):
-                return None, 0
+                return None, 0, 0
             meta = self._read_meta(slot_off)
             if not meta or meta['size'] == 0 or meta['size'] > self.MAX_FRAME_BYTES:
-                return None, 0
+                return None, 0, 0
             v2 = self._read_u64(slot_off + self.SEQ_OFFSET)
             if v1 != v2:
-                return None, 0
+                return None, 0, 0
             pay_start = slot_off + self.PAYLOAD_OFFSET
             pay_end = pay_start + meta['size']
             if pay_end > len(self._shm_view):
-                return None, 0
+                return None, 0, 0
             raw = self._shm_view[pay_start:pay_end]
             img = self._rebuild_frame(raw, meta)
             if img is None:
-                return None, 0
+                return None, 0, 0
             self._last_idx = latest
-            return img, meta['ts']
+            return img, meta['ts'], int(meta.get('flags', 0))
         except Exception as e:
             logger.debug(f"retrieve error: {e}")
-            return None, 0
+            return None, 0, 0
 
     def _try_attach_notify_sem(self) -> bool:
         """惰性打开跨进程通知信号量（失败后按间隔重试）。
@@ -538,7 +545,6 @@ class _ShmReader:
             ok, img, ts = self._try_read()
             if ok:
                 return ok, img, ts
-
             now = time.monotonic()
             if deadline is not None and now >= deadline:
                 return False, None, 0
@@ -598,9 +604,10 @@ class _ShmReader:
         self._maybe_reconnect()
         if not self.grab():
             return False, None, 0
-        img, ts = self.retrieve()
+        img, ts, flags = self.retrieve()
         if img is not None:
             self._last_progress = time.monotonic()
+            self.last_frame_corrupted = bool(flags & SHM_FLAG_CORRUPTED)
         return (img is not None), img, ts
 
     def close(self):
@@ -1319,9 +1326,28 @@ class RTSPClient(_BaseRTSPClient):
         :param blocking: 仅对 SHM 模式有效，是否阻塞等待新帧
         :param timeout_ms: 仅对 SHM 模式有效，阻塞超时（毫秒）
         :return: (帧时间戳, 图像帧)。失败返回 (-1, None)
+
+        需要知道“这一帧是否花屏”时请用 read_ex()。
+        """
+        ts, img, _corrupted = self.read_ex(stream_id, blocking=blocking, timeout_ms=timeout_ms)
+        return ts, img
+
+    def read_ex(self, stream_id: str, blocking: bool = False,
+                timeout_ms: Optional[float] = None) -> Tuple[int, Optional[np.ndarray], bool]:
+        """
+        同 read()，但额外返回**该帧本身是否花屏**（解码器自报）。
+
+        :return: (帧时间戳, 图像帧, 是否花屏)；失败返回 (-1, None, False)
+
+        说明：
+          - 花屏判定完全基于解码器的硬信号（缺参考帧 / 错误掩盖 / 码流非法），
+            不依赖像素猜测，因此不会因为夜间红外、低照度、纯色场景而误判；
+          - SHM 模式从帧元数据的 flags 位读取，gRPC JPEG 模式从 FrameResponse.corrupted 读取；
+          - 该标记是“逐帧”的：只说明你拿到的这一帧，而不是整条流的健康状况
+            （整条流的统计见 StreamInfo.corrupted_frames / glitch_ratio）。
         """
         if not self._ensure_stub():
-            return -1, None
+            return -1, None, False
 
         # 确保流有效（服务端重启时会自动用相同参数重新启动）
         current_id = self._get_current_stream_id(stream_id)
@@ -1329,21 +1355,21 @@ class RTSPClient(_BaseRTSPClient):
             f"[RTSPClient] read: original={stream_id}, initial_current_id={current_id}"
         )
         if not current_id:
-            return -1, None
+            return -1, None, False
 
         # 优先按服务端配置决定路径
         if self._stream_uses_shm(current_id):
             # _stream_uses_shm 内部可能触发重连/重启，刷新当前有效 id
             current_id = self._get_current_stream_id(stream_id)
             if not current_id:
-                return -1, None
+                return -1, None, False
             reader = self._get_shm_reader(current_id)
             if reader is None:
-                return -1, None
+                return -1, None, False
             ok, img, ts = reader.read(blocking=blocking, timeout_ms=timeout_ms)
             if ok and img is not None:
-                return int(ts), img
-            return -1, None
+                return int(ts), img, bool(getattr(reader, "last_frame_corrupted", False))
+            return -1, None, False
 
         # gRPC JPEG 路径（带 UNAVAILABLE 自动重连，指数退避）
         max_retries = 3
@@ -1351,15 +1377,16 @@ class RTSPClient(_BaseRTSPClient):
             # 每次尝试前刷新当前有效的 stream_id，防止期间发生二次重启
             current_id = self._get_current_stream_id(stream_id)
             if not current_id:
-                return -1, None
+                return -1, None, False
 
             try:
                 req = stream_service_pb2.FrameRequest(stream_id=current_id)
                 resp = self._stub.GetLatestFrame(req, timeout=5)
                 frame_seq = getattr(resp, "frame_seq", -1)
+                corrupted = bool(getattr(resp, "corrupted", False))
                 if resp.success and resp.image_data:
                     img = self._decode_jpeg(resp.image_data)
-                    return frame_seq, img
+                    return frame_seq, img, corrupted
                 # 记录无帧原因，便于诊断（区分“流不存在/已过期”与“已连接但暂无帧”）
                 logger.info(
                     f"[RTSPClient] GetLatestFrame 无帧: "
@@ -1367,7 +1394,7 @@ class RTSPClient(_BaseRTSPClient):
                     f"has_data={bool(resp.image_data)}, frame_seq={frame_seq}, "
                     f"message={resp.message!r}"
                 )
-                return frame_seq, None
+                return frame_seq, None, False
             except grpc.RpcError as e:
                 if e.code() == grpc.StatusCode.UNAVAILABLE and attempt < max_retries:
                     sleep_time = 1.0 * (2 ** attempt)
@@ -1377,17 +1404,29 @@ class RTSPClient(_BaseRTSPClient):
                         break
                     continue
                 logger.error(f"[RTSPClient] gRPC 读取失败: {e.details()}")
-                return -1, None
+                return -1, None, False
             except Exception as e:
                 logger.error(f"[RTSPClient] gRPC 读取失败: {e}")
-                return -1, None
-        return -1, None
+                return -1, None, False
+        return -1, None, False
 
     def stream_frames(self, stream_id: str, max_fps: int = 0) -> Generator[Tuple[int, Optional[np.ndarray]], None, None]:
         """
         流式获取视频帧（仅 gRPC JPEG 模式支持生成器；SHM 模式会提示并降级为空）
 
         服务端重启导致流失效时，生成器会结束，业务层需要重新调用 start_stream + stream_frames。
+
+        需要逐帧花屏标记时请用 stream_frames_ex()。
+        """
+        for ts, img, _corrupted in self.stream_frames_ex(stream_id, max_fps=max_fps):
+            yield (ts, img)
+
+    def stream_frames_ex(self, stream_id: str,
+                         max_fps: int = 0) -> Generator[Tuple[int, Optional[np.ndarray], bool], None, None]:
+        """
+        同 stream_frames()，但额外 yield **该帧本身是否花屏**（解码器自报）。
+
+        :return: 生成器，逐帧产出 (帧时间戳, 图像帧, 是否花屏)
         """
         if not self._ensure_stub():
             logger.error("未连接到服务器")
@@ -1402,7 +1441,7 @@ class RTSPClient(_BaseRTSPClient):
         if self._stream_uses_shm(current_id):
             logger.error(
                 f"[RTSPClient] stream_frames 不支持共享内存模式，"
-                f"请使用 read(stream_id, blocking=True)。"
+                f"请使用 read_ex(stream_id, blocking=True)。"
             )
             return
 
@@ -1411,9 +1450,9 @@ class RTSPClient(_BaseRTSPClient):
             for resp in self._stub.StreamFrames(req):
                 if resp.success and resp.image_data and resp.frame_seq != -1:
                     img = self._decode_jpeg(resp.image_data)
-                    yield (resp.frame_seq, img)
+                    yield (resp.frame_seq, img, bool(getattr(resp, "corrupted", False)))
                 else:
-                    yield (-1, None)
+                    yield (-1, None, False)
         except grpc.RpcError as e:
             logger.error(f"流式读取异常: {e.details()}")
         except Exception as e:

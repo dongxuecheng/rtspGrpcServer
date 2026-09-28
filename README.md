@@ -224,6 +224,7 @@ while True:
 | success | bool | 是否成功获取帧 |
 | image_data | bytes | JPEG 编码的图像数据 |
 | message | string | 消息 |
+| corrupted | bool | **该帧是否花屏**（解码器自报：缺参考帧/错误掩盖/码流非法） |
 
 **Python 示例：**
 ```python
@@ -238,6 +239,35 @@ for frame_seq, frame in client.stream_frames(stream_id, max_fps=15):
 
 cv2.destroyAllWindows()
 ```
+
+### 判断“我拿到的这一帧是否花屏”
+
+服务端会随帧下发**逐帧花屏标记**：它完全来自解码器的硬信号（缺参考帧 / 错误掩盖 /
+码流非法），不做像素猜测，因此不会因夜间红外、低照度、纯色场景而误判。
+
+```python
+# gRPC JPEG 模式与 SHM 模式都支持
+while True:
+    ts, frame, corrupted = client.read_ex(stream_id)   # read() 是它的兼容包装
+    if frame is None:
+        continue
+    if corrupted:
+        print(f"这一帧花屏（ts={ts}），建议丢弃/跳过")
+        continue
+    process(frame)
+
+# 流式接口同理：
+for ts, frame, corrupted in client.stream_frames_ex(stream_id, max_fps=15):
+    ...
+```
+
+- 传输入口：gRPC 为 `FrameResponse.corrupted`，SHM 为 `ShmMeta.frame_flags` 的
+  `SHM_FRAME_FLAG_CORRUPTED` 位（两者字段位置都没变，旧客户端忽略即可）。
+- 这是“逐帧”信息；想知道整条流的健康状况（累计花屏帧数、最近 1 秒花屏占比）请看
+  `StreamInfo.corrupted_frames` / `StreamInfo.glitch_ratio`。
+- CPU（FFmpeg）路径：花屏帧仍然下发并打标记；GPU（NVDEC）路径：花屏帧会被直接丢弃
+  （不会下发），此时标记恒为 false，可从 `corrupted_frames` 的增长看出丢帧。
+- Web 控制台预览时，花屏帧会在画面左上角闪一下「花屏」角标。
 
 ---
 

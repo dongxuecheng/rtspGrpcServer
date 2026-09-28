@@ -125,6 +125,13 @@ bool CpuDecoder::grab()
             decode_us_total += std::chrono::duration_cast<std::chrono::microseconds>(
                                    std::chrono::steady_clock::now() - t_decode)
                                    .count();
+            // 逐帧花屏标记：这一帧的解码错误标志（供客户端判断“我拿到的这帧能不能用”）
+            const int err_flags = current_frame_ ? current_frame_->decode_error_flags : 0;
+            constexpr int CORRUPT_MASK = FF_DECODE_ERROR_MISSING_REFERENCE |
+                                         FF_DECODE_ERROR_CONCEALMENT_ACTIVE |
+                                         FF_DECODE_ERROR_INVALID_BITSTREAM;
+            last_frame_corrupted_.store((err_flags & CORRUPT_MASK) != 0, std::memory_order_relaxed);
+
             frame_ready_.store(true, std::memory_order_release);
             profile_grab(demux_us_total, decode_us_total);
             return true; // 成功拿到一帧，退出 grab

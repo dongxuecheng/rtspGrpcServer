@@ -331,7 +331,12 @@ python example.py [编号]      # 编号 1-10，或 all 顺序运行全部
   - GPU（NVDEC）：`cuvidGetDecodeStatus` 的 `cuvidDecodeStatus_Error` / `Error_Concealed`；**历史实现是静默 `return 0`**，既丢帧又丢掉花屏信息，且 `pfnDisplayPicture` 返回 0 可能中止解析——现在是计数 + `return 1`（只丢这一帧）。
   - `StreamTask::updateGlitchStats()` 每秒结算窗口占比 → `StreamInfo.corrupted_frames`（累计）与 `StreamInfo.glitch_ratio`（最近 1 秒占比），Web 控制台据此显示「花屏累计 N」/「花屏 x%」标签。
   - 持续花屏时可选自动重连：`RTSP_GLITCH_RECONNECT_S=<秒>`（默认 0=关闭）。FFmpeg 封装没有暴露 RTCP FIR/PLI，无法直接请求 IDR，重连是唯一可靠的自愈手段。
-  - 自测开关：`RTSP_FAKE_GLITCH=1` 每 100 帧伪造一次花屏，用于验证「日志 → proto → Web 展示」链路（正常流实测 30 秒 0 误报）。
+  - 自测开关：`RTSP_FAKE_GLITCH=1` 每 100 个发布帧伪造一次花屏（同时置位逐帧标记），用于验证「日志 → proto → Web/客户端」链路（正常流实测 30 秒 0 误报）。
+  - **逐帧标记**：除了整流的统计，还会随帧下发“这一帧本身是否花屏”——gRPC 走
+    `FrameResponse.corrupted`，SHM 走 `ShmMeta.frame_flags` 的 `SHM_FRAME_FLAG_CORRUPTED`
+    位（复用原 `reserved` 字段，布局与 `sizeof(ShmMeta)` 都没变）。客户端用
+    `read_ex()` / `stream_frames_ex()` 取第三个返回值即可。注意 NVDEC 路径是丢弃花屏帧、
+    不下发，因此该标记恒为 false（丢帧次数看 `corrupted_frames`）。
   - 像素域检测（灰块率、块效应、帧间差）只在解码器不报错但画面确有伪影时才需要，且夜间红外切黑白/低照度/纯色场景会大量误报，慎用。
 - **proto 文件同步**：`stream_service.proto` 在根目录和 `client/` 下各有一份。修改后需要同时更新，并重新生成 C++ 和 Python 的 protobuf/gRPC 代码。
 - **共享内存布局一致性**：C++ 端 `include/zero_copy_channel.hpp` 中的 `ShmMeta` **带 `alignas(64)`**，因此真实布局是：`sequence@0`、`meta@64`（不是 8）、`sizeof(ShmMeta)=64`（不是 48）、**payload@128**（不是 56）、`sizeof(ShmFrameSlot)=128`；`static_assert` 已把这些值固化。**消费端一律不要硬编码这些偏移**，应使用 `GetShmLayout` 返回的偏移（C++ 用 `offsetof/sizeof` 算）：Python 客户端 `_ShmReader` 优先取服务端偏移（兜底常量仅为兼容旧桩），C++ 工具见 `tools/save_frames.cpp`。历史上就因为头文件里一行过时注释（`// 48 bytes, offset 8`）导致 Python 硬编码错偏移，所有帧被当成 `size==0` 丢弃（表现为“能连上但 0 帧”）。

@@ -68,6 +68,7 @@ message FrameResponse {
     bytes image_data = 2;
     string message = 3;
     int64 frame_seq = 4;
+    bool corrupted = 5;   // 本帧是否花屏（解码器自报：缺参考帧/错误掩盖/码流非法）
 }
 
 // 查询所有流请求

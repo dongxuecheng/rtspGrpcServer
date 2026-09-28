@@ -49,6 +49,13 @@ public:
     // 清空花屏计数（重连/换流后调用，避免新旧流的统计混在一起）
     virtual void resetDecodeHealth() {}
 
+    // 最近一次 grab() 得到的**那一帧本身**是否花屏。
+    // 与 getDecodeHealth()（流的累计统计）不同：这个是逐帧的，用来回答
+    // “我拿到的这一帧能不能用”。
+    // 注意：NVDEC 路径会把花屏帧直接丢弃（不会下发），因此这里恒为 false——
+    // 想知道“有没有丢过帧”请看 getDecodeHealth().corrupted_frames。
+    virtual bool lastFrameCorrupted() const { return false; }
+
     // GPU 帧支持（可选实现）
     virtual bool isGpuFrame() const { return false; }
     virtual uint8_t* getGpuFramePtr() { return nullptr; }

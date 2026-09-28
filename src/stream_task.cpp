@@ -107,6 +107,8 @@ StreamTask::StreamTask(const std::string &url,
     {
         glitch_reconnect_s_ = std::max(0, std::atoi(env_glitch));
     }
+    // 自测开关：伪造花屏帧，用于验证 逐帧标记/日志/proto/Web 全链路
+    fake_glitch_enabled_ = (std::getenv("RTSP_FAKE_GLITCH") != nullptr);
     last_encode_time_ = std::chrono::steady_clock::now();
     // 首帧必须立即放行：初始截止时间放到过去
     next_process_deadline_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
@@ -774,6 +776,8 @@ void StreamTask::stepCompute()
     }
 
     bool frame_ready = false;
+    // 本帧是否花屏（解码器自报，逐帧）：随帧一起发布，消费端据此判断“这一帧能不能用”
+    bool frame_corrupted = false;
 
     // 说明：decoder_mutex_ 只用于保护 decoder_ 指针切换（updateUrl/switchDecoder）和
     // 解码器内部状态（含 retrieve 里的 sws 上下文）。编码（JPEG）、写 SHM 都不需要它，
@@ -785,6 +789,14 @@ void StreamTask::stepCompute()
     {
         auto t_sws = std::chrono::steady_clock::now();
         bool retrieved = decoder_->retrieve(reusable_frame_, true) && !reusable_frame_.empty();
+        frame_corrupted = decoder_->lastFrameCorrupted(); // 拿锁内快照，避免被下一次 grab 覆盖
+        // 自测开关（RTSP_FAKE_GLITCH=1）：每 100 个发布帧伪造一次花屏，
+        // 用于在没有真实坏流的情况下验证「逐帧标记 → gRPC/SHM → 客户端/Web」全链路
+        if (fake_glitch_enabled_ && (++fake_pub_counter_ % 100 == 0))
+        {
+            frame_corrupted = true;
+            fake_glitch_frames_.fetch_add(1, std::memory_order_relaxed);
+        }
         profileAdd(prof_sws_us_, t_sws);
         lock.unlock(); // ← 写 SHM（memcpy + 可能的建/扩容）不持锁
 
@@ -794,7 +806,8 @@ void StreamTask::stepCompute()
             // 首次解码成功后按实际帧大小创建 SHM；后续帧变大（如分辨率切换）时自动扩容重建
             ensureShmChannel(reusable_frame_);
 
-            if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_))
+            const uint32_t flags = frame_corrupted ? SHM_FRAME_FLAG_CORRUPTED : 0u;
+            if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_, flags))
             {
                 frame_ready = true;
                 prof_frames_.fetch_add(1, std::memory_order_relaxed);
@@ -847,6 +860,13 @@ void StreamTask::stepCompute()
             {
                 auto t_sws = std::chrono::steady_clock::now();
                 bool retrieved = decoder_->retrieve(reusable_frame_, true) && !reusable_frame_.empty();
+                frame_corrupted = decoder_->lastFrameCorrupted(); // 拿锁内快照
+                // 自测开关：每 100 个发布帧伪造一次花屏（与 SHM 分支同一套逻辑）
+                if (fake_glitch_enabled_ && (++fake_pub_counter_ % 100 == 0))
+                {
+                    frame_corrupted = true;
+                    fake_glitch_frames_.fetch_add(1, std::memory_order_relaxed);
+                }
                 profileAdd(prof_sws_us_, t_sws);
                 lock.unlock(); // ← 编码不持锁：IO 线程可以立即 grab 下一帧
                 if (retrieved)
@@ -868,6 +888,7 @@ void StreamTask::stepCompute()
                 std::unique_lock<std::shared_mutex> frame_lock(frame_mutex_);
                 prev_frame = std::move(latest_encoded_frame_);
                 latest_encoded_frame_ = encode_buffer;
+                latest_frame_corrupted_ = frame_corrupted;
                 last_encode_time_ = std::chrono::steady_clock::now();
                 // 使用 grab 时记录的时间戳，而非编码完成时间
                 // 这样即使只解码关键帧（间隔几秒）或线程池排队，时间戳仍反映帧到达时刻
@@ -994,24 +1015,17 @@ void StreamTask::updateGlitchStats()
 
     const auto health = decoder_->getDecodeHealth();
 
-    // 解码器累计计数 → 本窗口新增
+    // “真实 + 自测伪造”的合计计数：窗口增量与上报值都基于它，保证日志与前端一致
+    const uint64_t combined = health.corrupted_frames + fake_glitch_frames_.load(std::memory_order_relaxed);
+
     uint64_t new_errors = 0;
-    if (health.corrupted_frames >= glitch_last_seen_total_)
+    if (combined >= glitch_last_seen_total_)
     {
-        new_errors = health.corrupted_frames - glitch_last_seen_total_;
+        new_errors = combined - glitch_last_seen_total_;
     }
-    glitch_last_seen_total_ = health.corrupted_frames;
+    glitch_last_seen_total_ = combined;
 
-    // 自测开关：没有真实坏流时用来验证 日志/proto/Web 展示 链路
-    // （RTSP_FAKE_GLITCH=1，每 100 帧伪造一次花屏）
-    static const bool fake_glitch = (std::getenv("RTSP_FAKE_GLITCH") != nullptr);
-    if (fake_glitch && (++fake_glitch_counter_ % 100 == 0))
-    {
-        ++fake_glitch_errors_;
-        ++new_errors;
-    }
-
-    glitch_total_.store(health.corrupted_frames + fake_glitch_errors_, std::memory_order_relaxed);
+    glitch_total_.store(combined, std::memory_order_relaxed);
     glitch_win_errors_ += new_errors;
     ++glitch_win_frames_;
 
@@ -1029,8 +1043,8 @@ void StreamTask::updateGlitchStats()
         glitch_logged_ = true;
         spdlog::warn("[glitch] {} 检测到花屏：累计 {} 帧（缺参考帧 {} / 码流非法 {} / 错误掩盖 {}）；"
                      "RTSP 走 TCP 时通常意味着相机侧码流异常或解码器丢参考帧",
-                     stream_id_, health.corrupted_frames + fake_glitch_errors_,
-                     health.missing_reference, health.invalid_bitstream, health.error_concealed);
+                     stream_id_, combined, health.missing_reference, health.invalid_bitstream,
+                     health.error_concealed);
     }
 
     // 每秒结算一次窗口占比
@@ -1046,8 +1060,7 @@ void StreamTask::updateGlitchStats()
     if (glitch_logged_ && glitch_win_errors_ == 0)
     {
         glitch_logged_ = false;
-        spdlog::info("[glitch] {} 花屏已恢复（累计 {} 帧）", stream_id_,
-                     health.corrupted_frames + fake_glitch_errors_);
+        spdlog::info("[glitch] {} 花屏已恢复（累计 {} 帧）", stream_id_, combined);
     }
 
     // 可选恢复手段：持续花屏时重连（现有 FFmpeg 封装没有暴露 RTCP FIR/PLI 请求 IDR 的能力，
@@ -1140,7 +1153,7 @@ void StreamTask::resetFirstFrameState()
     first_frame_seen_.store(false, std::memory_order_release);
 }
 
-bool StreamTask::getLatestEncodedFrame(std::shared_ptr<std::string> &out_buffer)
+bool StreamTask::getLatestEncodedFrame(std::shared_ptr<std::string> &out_buffer, bool *out_corrupted)
 {
     updateHeartbeat();
     std::shared_lock<std::shared_mutex> lock(frame_mutex_);
@@ -1150,10 +1163,15 @@ bool StreamTask::getLatestEncodedFrame(std::shared_ptr<std::string> &out_buffer)
         return false;
     }
     out_buffer = latest_encoded_frame_;
+    if (out_corrupted)
+    {
+        *out_corrupted = latest_frame_corrupted_;
+    }
     return true;
 }
 
-bool StreamTask::waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms)
+bool StreamTask::waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms,
+                                  bool *out_corrupted)
 {
     updateHeartbeat();
     std::unique_lock<std::shared_mutex> lock(frame_mutex_);
@@ -1174,6 +1192,10 @@ bool StreamTask::waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint
     {
         out_buffer = latest_encoded_frame_;
         current_seq = frame_seq_.load(std::memory_order_acquire);
+        if (out_corrupted)
+        {
+            *out_corrupted = latest_frame_corrupted_;
+        }
         return true;
     }
     return false;

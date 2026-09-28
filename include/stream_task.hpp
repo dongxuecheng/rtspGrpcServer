@@ -49,7 +49,8 @@ public:
     void stop();
 
     // 获取最新编码好的帧（线程安全，零拷贝）
-    bool getLatestEncodedFrame(std::shared_ptr<std::string> &out_buffer);
+    // out_corrupted（可选）回传该帧本身是否花屏（解码器自报），与帧是同一时刻的快照
+    bool getLatestEncodedFrame(std::shared_ptr<std::string> &out_buffer, bool *out_corrupted = nullptr);
 
     // Getters / Setters
     bool isConnected();
@@ -87,7 +88,8 @@ public:
     void updateGlitchStats();
 
     // 条件变量等待下一帧（零拷贝）
-    bool waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms);
+    bool waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms,
+                          bool *out_corrupted = nullptr);
 
     // 心跳保活
     void keepAlive();
@@ -189,6 +191,8 @@ private:
     std::shared_mutex frame_mutex_;
     std::condition_variable_any frame_cv_;
     std::shared_ptr<std::string> latest_encoded_frame_;
+    // 最近发布的那一帧本身是否花屏（与 latest_encoded_frame_ 同一把锁下更新）
+    bool latest_frame_corrupted_ = false;
 
     // 帧内存池
     std::shared_ptr<FrameMemoryPool> frame_pool_;
@@ -252,8 +256,9 @@ private:
     bool glitch_logged_ = false;             // 本次花屏是否已告警（避免刷屏）
     int64_t glitch_high_since_ms_ = 0;       // 持续花屏起始时间（用于可选重连）
     int glitch_reconnect_s_ = 0;             // >0：持续花屏该秒数后重连（RTSP_GLITCH_RECONNECT_S）
-    uint64_t fake_glitch_counter_ = 0;       // 自测：伪造花屏计数（RTSP_FAKE_GLITCH=1）
-    uint64_t fake_glitch_errors_ = 0;
+    bool fake_glitch_enabled_ = false;       // 自测：RTSP_FAKE_GLITCH=1
+    std::atomic<uint64_t> fake_glitch_frames_{0}; // 自测：被标记为花屏的帧数
+    uint64_t fake_pub_counter_ = 0;          // 自测：发布帧计数（每 100 帧伪造一次）
 
     // 出帧率统计（1 秒滚动窗口，无锁；发布点调用 recordPublishedFrame）
     void recordPublishedFrame();

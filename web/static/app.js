@@ -564,6 +564,8 @@ function nextJpegPart(buf) {
   return {
     jpeg: buf.slice(start, start + len),
     ts: tsMatch ? parseInt(tsMatch[1], 10) : 0,
+    // 服务端逐帧花屏标记（解码器自报）
+    glitch: /x-frame-glitch:\s*1/i.test(header),
     rest: buf.subarray(start + len),
   };
 }
@@ -578,8 +580,19 @@ async function drawJpeg(ctx, canvas, jpeg) {
   bmp.close();
 }
 
-function previewUrl(streamId) {
-  const [w, q, fps] = viewer.quality.split('|');
+// 当前这一帧是否花屏（服务端在 MJPEG 分片头里带 X-Frame-Glitch）
+let glitchTimer = 0;
+function showFrameGlitch(on) {
+  const el = $('#preview-glitch');
+  if (!el) return;
+  if (on) {
+    el.hidden = false;
+    clearTimeout(glitchTimer);
+    glitchTimer = setTimeout(() => { el.hidden = true; }, 1500);
+  }
+}
+
+function previewUrl(streamId) {  const [w, q, fps] = viewer.quality.split('|');
   return `/api/streams/${encodeURIComponent(streamId)}/mjpeg`
     + `?max_width=${w}&quality=${q}&fps=${fps}&_=${Date.now()}`;
 }
@@ -635,12 +648,13 @@ async function startPreviewStream() {
       // 尽量把本次收到的分片都取出来，只渲染最后一帧（积压时自动丢中间帧）
       let newest = null;
       let newestTs = 0;
+      let newestGlitch = false;
       let got = 0;
       for (;;) {
         const part = nextJpegPart(buf);
         if (!part) break;
         buf = part.rest;
-        if (part.jpeg) { newest = part.jpeg; newestTs = part.ts; got += 1; }
+        if (part.jpeg) { newest = part.jpeg; newestTs = part.ts; newestGlitch = part.glitch; got += 1; }
       }
       if (!newest) continue;
 
@@ -650,6 +664,8 @@ async function startPreviewStream() {
       viewer.lastSize = `${canvas.width}×${canvas.height}`;
       $('#preview-live').hidden = false;
       $('#preview-hint').hidden = true;
+      // 当前这一帧是否花屏（服务端解码器自报）：亮 1.5 秒后自动隐藏
+      showFrameGlitch(newestGlitch);
 
       const now = performance.now();
       if (now - viewer.fpsT0 >= 1000) {
@@ -774,6 +790,8 @@ function closePreview() {
   $('#preview-card').hidden = true;
   $('#preview-canvas').hidden = true;
   $('#preview-live').hidden = true;
+  $('#preview-glitch').hidden = true;
+  clearTimeout(glitchTimer);
   $('#preview-hint').hidden = true;
   $('#preview-stats').textContent = '';
 }

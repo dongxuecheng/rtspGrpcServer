@@ -134,7 +134,7 @@ def dedicated_client() -> Iterator[RTSPClient]:
 def grab_jpeg(client: RTSPClient, stream_id: str,
               quality: int = 80, max_width: int = 0) -> Optional[bytes]:
     """取一帧并编码为 JPEG（按流自身模式自动走 SHM 或 gRPC JPEG）"""
-    _ts, img = client.read(stream_id, blocking=False)
+    _ts, img, _corrupted = client.read_ex(stream_id, blocking=False)
     if img is None:
         return None
     if max_width and img.shape[1] > max_width:
@@ -352,7 +352,7 @@ def api_mjpeg(stream_id: str,
                 idle_deadline = time.time() + FRAME_WAIT_MS / 1000.0
                 while True:
                     tick = time.monotonic()
-                    ts, img = client.read(stream_id, blocking=False)
+                    ts, img, frame_corrupted = client.read_ex(stream_id, blocking=False)
                     if img is None or ts == last_ts:
                         if time.time() > idle_deadline:
                             return  # 长时间无新帧：结束本次预览（前端会提示并重试）
@@ -374,10 +374,12 @@ def api_mjpeg(stream_id: str,
                     _preview_sent(stream_id, ts)
                     # 每个分片带上帧时间戳：浏览器据此计算“端到端延迟”（含隧道/网络积压），
                     # 并在积压过大时重新连接以丢弃缓冲。额外的分片头对 <img> 无害。
+                    # X-Frame-Glitch：这一帧被解码器判定为花屏（缺参考帧/错误掩盖/码流非法）
                     yield (b"--frame\r\n"
                            b"Content-Type: image/jpeg\r\n"
                            + b"Content-Length: " + str(len(data)).encode() + b"\r\n"
                            + b"X-Frame-Ts: " + str(int(ts)).encode() + b"\r\n"
+                           + (b"X-Frame-Glitch: 1\r\n" if frame_corrupted else b"")
                            + b"\r\n" + data + b"\r\n")
 
                     # 限速到目标帧率（只补足剩余的间隔时间）

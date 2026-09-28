@@ -244,12 +244,14 @@ grpc::Status RTSPServiceImpl::GetLatestFrame(grpc::ServerContext *context, const
     }
 
     std::shared_ptr<std::string> frame_ptr;
-    if (task->getLatestEncodedFrame(frame_ptr))
+    bool frame_corrupted = false;
+    if (task->getLatestEncodedFrame(frame_ptr, &frame_corrupted))
     {
         response->set_success(true);
         response->set_image_data(*frame_ptr);
         response->set_message("OK");
         response->set_frame_seq(task->getFrameSequence());
+        response->set_corrupted(frame_corrupted);
     }
     else
     {
@@ -299,6 +301,7 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
 
     std::shared_ptr<std::string> encoded_frame;
     streamingservice::FrameResponse response;
+    bool frame_corrupted = false;
 
     while (!context->IsCancelled())
     {
@@ -312,7 +315,7 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
             break;
         }
 
-        bool has_new_frame = task->waitForNextFrame(encoded_frame, client_seq, 500);
+        bool has_new_frame = task->waitForNextFrame(encoded_frame, client_seq, 500, &frame_corrupted);
         if (!has_new_frame)
         {
             continue;
@@ -332,6 +335,7 @@ grpc::Status RTSPServiceImpl::StreamFrames(grpc::ServerContext *context,
         response.set_image_data(*encoded_frame);
         response.set_message("OK");
         response.set_frame_seq(client_seq);
+        response.set_corrupted(frame_corrupted);
 
         if (!writer->Write(response))
         {

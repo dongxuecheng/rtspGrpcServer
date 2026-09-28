@@ -32,8 +32,12 @@ struct alignas(64) ShmMeta
     uint32_t channels;       // 通道数: 1=GRAY, 3=BGR, 4=BGRA
     uint32_t depth;          // 位深: CV_8U=0, CV_16U=2, CV_32F=5 等
     uint32_t step;           // 行字节数 (含 padding)，用于非连续内存
-    uint32_t reserved;       // 对齐填充
+    uint32_t frame_flags;    // 帧标志位（复用原 reserved 字段，布局/大小不变）
 };
+
+// ShmMeta::frame_flags 的位定义（消费端读 meta 内偏移 44 处的 uint32）
+//   消费后即可知道“我拿到的这一帧”是否有问题，而不只是“这条流有没有花屏”
+static constexpr uint32_t SHM_FRAME_FLAG_CORRUPTED = 1u << 0; // 该帧解码出错/花屏
 
 // 注意：ShmFrameSlot 只包含元数据，不包含 payload。
 // payload 紧跟元数据区之后，slot 总大小 = align_up(SLOT_META_SIZE + max_frame_bytes, 64)
@@ -223,7 +227,7 @@ public:
     ZeroCopyChannel(ZeroCopyChannel&&) = delete;
     ZeroCopyChannel& operator=(ZeroCopyChannel&&) = delete;
 
-    bool write_frame_mat(const cv::Mat& frame, uint64_t timestamp)
+    bool write_frame_mat(const cv::Mat& frame, uint64_t timestamp, uint32_t frame_flags = 0)
     {
         std::unique_lock<std::mutex> lock(cleanup_mutex_);
         if (cleaned_.load() || !base_ || frame.empty())
@@ -264,6 +268,7 @@ public:
         slot->meta.channels = frame.channels();
         slot->meta.depth = frame.depth();
         slot->meta.step = static_cast<uint32_t>(continuous_frame.step[0]);
+        slot->meta.frame_flags = frame_flags;
 
         // 6. 拷贝帧数据到 payload 区域（slot 元数据之后）
         uint8_t *payload_ptr = slot_base + payload_offset_;
@@ -289,7 +294,8 @@ public:
     }
 
     // 写入原始数据（无 OpenCV Mat）
-    void write_frame(const uint8_t *src_data, uint64_t size, uint64_t w, uint64_t h, uint64_t ts)
+    void write_frame(const uint8_t *src_data, uint64_t size, uint64_t w, uint64_t h, uint64_t ts,
+                     uint32_t frame_flags = 0)
     {
         std::unique_lock<std::mutex> lock(cleanup_mutex_);
         if (cleaned_.load() || !base_ || size > max_frame_bytes_)
@@ -309,6 +315,7 @@ public:
         slot->meta.width = w;
         slot->meta.height = h;
         slot->meta.timestamp = ts;
+        slot->meta.frame_flags = frame_flags;
 
         // 3. 拷贝实际数据
         uint8_t *payload_ptr = slot_base + payload_offset_;

@@ -54,6 +54,9 @@ public:
             decoder_->resetDecodeHealth();
     }
 
+    // 最近 grab 到的那一帧是否花屏（逐帧，供“这一帧能不能用”的判断）
+    bool lastFrameCorrupted() const override { return last_frame_corrupted_.load(std::memory_order_relaxed); }
+
 private:
     bool reconnect(); // 重连辅助函数
 
@@ -70,6 +73,7 @@ private:
     int64_t last_pts_ = 0;
     AVFrame *current_frame_ = nullptr;     // 保存当前 grab 到的帧
     std::atomic<bool> frame_ready_{false}; // 标志位：是否有一帧准备好被 retrieve
+    std::atomic<bool> last_frame_corrupted_{false}; // 最近 grab 的帧是否花屏（解码器自报）
 
     std::chrono::steady_clock::time_point open_time_; // demuxer/decoder 创建时间，用于首帧阶段判断
 };
