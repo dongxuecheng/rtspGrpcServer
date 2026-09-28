@@ -13,6 +13,7 @@ bool CpuDecoder::open(const std::string &url)
     release();
 
     // 1. 创建解封装器（auto_reboot=false，由上层 StreamTask 统一控制重连）
+    spdlog::info("[CpuDecoder] Opening stream: {}", url);
     demuxer_ = FFHDDemuxer::create_ffmpeg_demuxer(url, false, this->only_key_frames_);
     if (!demuxer_)
     {
@@ -26,6 +27,8 @@ bool CpuDecoder::open(const std::string &url)
     demuxer_->get_extra_data(&extra_data, &extra_size);
 
     // 2. 创建软解码器
+    spdlog::info("[CpuDecoder] codec={}, extra_data_size={}, url={}",
+                 static_cast<int>(demuxer_->get_video_codec()), extra_size, url);
     decoder_ = FFHDDecoder::create_ffmpeg_decoder(
         static_cast<AVCodecID>(demuxer_->get_video_codec()),
         extra_data,
@@ -39,6 +42,7 @@ bool CpuDecoder::open(const std::string &url)
     }
 
     is_opened_ = true;
+    open_time_ = std::chrono::steady_clock::now();
     spdlog::info("[CpuDecoder] Successfully opened stream: {}", url);
     return true;
 }
@@ -79,9 +83,15 @@ bool CpuDecoder::grab()
         // 2. 解码器内没有帧了，去 Demuxer 读新的数据包
         if (!demuxer_->demux(&packet_data, &packet_size, &last_pts_, &is_key))
         {
-            // demux 失败直接返回，由上层 StreamTask 统一处理重连
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - open_time_)
+                                  .count();
+            spdlog::warn("[CpuDecoder] demux failed after {} ms for {}, packet_size={}, key={}, opened={}",
+                         elapsed_ms, last_url_, packet_size, is_key, isOpened());
             return false;
         }
+
+        spdlog::trace("[CpuDecoder] demux ok: packet_size={}, pts={}, key={}", packet_size, last_pts_, is_key);
 
         // 3. 将新读取的 Packet 送入解码器
         // 送入失败时跳过当前包，继续读取下一个包

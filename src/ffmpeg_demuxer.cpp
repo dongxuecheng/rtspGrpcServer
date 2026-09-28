@@ -58,6 +58,25 @@ namespace FFHDDemuxer
         return true;
     }
 
+    static void set_rtsp_options(AVDictionary **options, const string &uri)
+    {
+        if (!options || !string_begin_with_ci(uri, "rtsp://"))
+            return;
+
+        av_dict_set(options, "rtsp_transport", "tcp", 0);
+        av_dict_set(options, "buffer_size", "16777216", 0); // 16MB 底层网络缓冲
+        av_dict_set(options, "stimeout", "20000000", 0);     // 20 秒超时（微秒）
+
+        // 增大初始探测窗口，避免 MPEG4/Hikvision 这类设备在开流初期丢头部信息
+        av_dict_set(options, "probesize", "16777216", 0);
+        av_dict_set(options, "analyzeduration", "20000000", 0);
+
+        // 降低网络抖动造成的丢包/延迟积压
+        av_dict_set(options, "fflags", "nobuffer", 0);
+        av_dict_set(options, "flags", "low_delay", 0);
+        av_dict_set(options, "max_delay", "500000", 0);
+    }
+
     class FFmpegDemuxerImpl : public FFmpegDemuxer
     {
     public:
@@ -312,27 +331,41 @@ namespace FFHDDemuxer
 
             this->m_fmtc = fmtc;
 
-            if (!checkFFMPEG(avformat_find_stream_info(fmtc, nullptr)))
+            AVDictionary *info_options = nullptr;
+            set_rtsp_options(&info_options, this->uri_opened_);
+            int stream_info_ret = avformat_find_stream_info(fmtc, nullptr);
+            if (info_options)
+            {
+                av_dict_free(&info_options);
+            }
+            if (!checkFFMPEG(stream_info_ret))
                 return false;
 
             m_iVideoStream = av_find_best_stream(fmtc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-            if (m_iVideoStream < 0)
+            if (m_iVideoStream < 0 || m_iVideoStream >= fmtc->nb_streams)
             {
-                INFOE("FFmpeg error: Could not find video stream in input file");
+                INFOE("FFmpeg error: Could not find a valid video stream in input file");
+                return false;
+            }
+
+            AVStream *video_stream = fmtc->streams[m_iVideoStream];
+            if (!video_stream || !video_stream->codecpar)
+            {
+                INFOE("FFmpeg error: Video stream metadata is missing");
                 return false;
             }
 
             m_frameCount = 0;
-            m_eVideoCodec = fmtc->streams[m_iVideoStream]->codecpar->codec_id;
-            m_nWidth = fmtc->streams[m_iVideoStream]->codecpar->width;
-            m_nHeight = fmtc->streams[m_iVideoStream]->codecpar->height;
-            m_eChromaFormat = (AVPixelFormat)fmtc->streams[m_iVideoStream]->codecpar->format;
+            m_eVideoCodec = video_stream->codecpar->codec_id;
+            m_nWidth = video_stream->codecpar->width;
+            m_nHeight = video_stream->codecpar->height;
+            m_eChromaFormat = (AVPixelFormat)video_stream->codecpar->format;
 
-            AVRational rTimeBase = fmtc->streams[m_iVideoStream]->time_base;
+            AVRational rTimeBase = video_stream->time_base;
             m_timeBase = av_q2d(rTimeBase);
             m_userTimeScale = timeScale;
-            m_fps = r2d(fmtc->streams[m_iVideoStream]->avg_frame_rate);
-            m_total_frames = fmtc->streams[m_iVideoStream]->nb_frames;
+            m_fps = r2d(video_stream->avg_frame_rate);
+            m_total_frames = video_stream->nb_frames;
 
             switch (m_eChromaFormat)
             {
@@ -376,9 +409,11 @@ namespace FFHDDemuxer
                 m_nBPP = 1;
             }
 
-            m_bMp4H264 = m_eVideoCodec == AV_CODEC_ID_H264 && (!strcmp(fmtc->iformat->long_name, "QuickTime / MOV") || !strcmp(fmtc->iformat->long_name, "FLV (Flash Video)") || !strcmp(fmtc->iformat->long_name, "Matroska / WebM"));
-            m_bMp4HEVC = m_eVideoCodec == AV_CODEC_ID_HEVC && (!strcmp(fmtc->iformat->long_name, "QuickTime / MOV") || !strcmp(fmtc->iformat->long_name, "FLV (Flash Video)") || !strcmp(fmtc->iformat->long_name, "Matroska / WebM"));
-            m_bMp4MPEG4 = m_eVideoCodec == AV_CODEC_ID_MPEG4 && (!strcmp(fmtc->iformat->long_name, "QuickTime / MOV") || !strcmp(fmtc->iformat->long_name, "FLV (Flash Video)") || !strcmp(fmtc->iformat->long_name, "Matroska / WebM"));
+            const char *iformat_name = fmtc->iformat && fmtc->iformat->long_name ? fmtc->iformat->long_name : "unknown";
+            const bool is_mp4_like_container = !strcmp(iformat_name, "QuickTime / MOV") || !strcmp(iformat_name, "FLV (Flash Video)") || !strcmp(iformat_name, "Matroska / WebM");
+            m_bMp4H264 = m_eVideoCodec == AV_CODEC_ID_H264 && is_mp4_like_container;
+            m_bMp4HEVC = m_eVideoCodec == AV_CODEC_ID_HEVC && is_mp4_like_container;
+            m_bMp4MPEG4 = m_eVideoCodec == AV_CODEC_ID_MPEG4 && is_mp4_like_container;
 
             if (m_bMp4H264 || m_bMp4HEVC)
             {
@@ -446,21 +481,7 @@ namespace FFHDDemuxer
         AVFormatContext *CreateFormatContext(const string &uri)
         {
             AVDictionary *options = nullptr;
-            if (string_begin_with_ci(uri, "rtsp://"))
-            {
-                av_dict_set(&options, "rtsp_transport", "tcp", 0);
-                av_dict_set(&options, "buffer_size", "10485760", 0); // 10MB 底层网络防抖缓存
-                av_dict_set(&options, "stimeout", "10000000", 0);     // 10秒超时 (单位: 微秒)
-
-                // 【探测参数】
-                // 5MB - 足够容纳高清 HEVC 的大关键帧，提高兼容性
-                av_dict_set(&options, "probesize", "5242880", 0);
-                av_dict_set(&options, "analyzeduration", "10000000", 0); // 最多探测 10 秒
-                // 减少分析过程中的多余丢包等待
-                // av_dict_set(&options, "flags", "low_delay", 0);
-                // // 如果你只需要视频不要音频，直接告诉 FFmpeg 别去花时间找音频流了
-                // av_dict_set(&options, "allowed_media_types", "video", 0);
-            }
+            set_rtsp_options(&options, uri);
 
             AVFormatContext *ctx = nullptr;
             int ret = avformat_open_input(&ctx, uri.c_str(), nullptr, &options);

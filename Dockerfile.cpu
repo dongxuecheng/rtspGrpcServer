@@ -42,7 +42,7 @@ RUN ldconfig /opt/hikvision/hik_libs /opt/hikvision/hik_libs/HCNetSDKCom
 
 # 拷贝已编译好的 CPU-only 二进制
 # 请确保宿主机当前目录下存在 rtsp_server 文件
-COPY rtsp_server /app/rtsp_server
+# COPY rtsp_server /app/rtsp_server
 
 # 暴露 gRPC 默认监听的 50051 端口
 EXPOSE 50051

@@ -8,6 +8,11 @@
 
 bool CudaDecoder::open(const std::string &url)
 {
+    // 确保在当前目标 GPU 的 CUDA context 下创建 NVDEC parser/decoder。
+    // IO 线程可能不是当初初始化 CUDA 的线程，若不显式绑定 context，
+    // cuvidCreateVideoParser 内部 cuCtxGetCurrent() 可能拿到 nullptr 或错误的 GPU。
+    CUDATools::AutoDevice auto_device_exchange(gpu_id_);
+
     last_url_ = url;      // 保存 URL 供后续重连使用
     frames_to_skip_ = 0; // GPU 解码器需要更多帧来预热和稳定 BGR 转换
 
@@ -43,6 +48,9 @@ bool CudaDecoder::open(const std::string &url)
         return false;
     }
 
+    // 记录 decoder 创建时间，用于 grab() 判断首帧阶段，避免空包/no-frame 过早失败。
+    open_time_ = std::chrono::steady_clock::now();
+
     // 3. 成功创建！推送额外数据并返回
     uint8_t *extra_data = nullptr;
     int extra_size = 0;
@@ -77,6 +85,9 @@ bool CudaDecoder::grab()
         return false;
     }
 
+    // IO 线程与计算线程可能不是同一个线程，每次操作 NVDEC 前必须绑定目标 GPU。
+    CUDATools::AutoDevice auto_device_exchange(gpu_id_);
+
     // 如果内部还有未取完的帧，不要去拉取新包覆盖！
     if (decoded_frames_available_ > 0)
     {
@@ -99,8 +110,31 @@ bool CudaDecoder::grab()
 
         if (decoded_frames_available_ > 0)
             break;
-        if (packet_size == 0)
+
+        // NVDEC 硬错误（会话创建失败 / 显存不足 / 解析器损坏）：
+        // 标记解码器为未打开并返回 false，下一次 stepIO 会走完整 open() 重建，
+        // 避免在坏掉的解码器上无限喂包导致流僵尸化
+        if (decoded_frames_available_ < 0)
+        {
+            spdlog::warn("[CudaDecoder] decode hard error for {}, marking decoder broken", last_url_);
+            is_opened_ = false;
             return false;
+        }
+
+        // 首帧阶段：空包或尚未解码出一帧时继续喂数据，避免 NVDEC 初始化期被误判为失败。
+        // av_read_frame 本身有 stimeout，不会无限空转。
+        if (packet_size == 0)
+        {
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - open_time_)
+                                  .count();
+            if (elapsed_ms < 10000) // 10 秒内容忍空包
+            {
+                continue;
+            }
+            spdlog::warn("[CudaDecoder] Empty packet persists beyond first-frame window for {}", last_url_);
+            return false;
+        }
     }
     return true;
 }

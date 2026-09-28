@@ -92,6 +92,12 @@ private:
     void markConnectionFailure();
     bool shouldGiveUpReconnection();
 
+    // 首帧宽限期：open 成功后的一段时间内，grab/demux 临时失败不视为连接中断，
+    // 避免摄像头刚 PLAY 后第一帧（尤其关键帧）尚未到达就触发重连。
+    static constexpr int FIRST_FRAME_GRACE_PERIOD_MS = 30000; // 30 秒
+    bool inFirstFrameGracePeriod() const;
+    void resetFirstFrameState();
+
     // --- 异步调度逻辑 ---
 
     // 调度下一步操作
@@ -100,6 +106,9 @@ private:
     // IO 操作，每个流一个线程，负责 grab 和调度计算任务
     void stepIO();
     void ioLoop();
+
+    // 共享内存通道：首次按实际帧大小创建；帧变大（分辨率切换）时自动扩容重建
+    void ensureShmChannel(const cv::Mat &frame);
 
     // 阶段2：计算操作 (Decode / Convert / Encode) -> 运行在 计算线程池
     void stepCompute();
@@ -175,6 +184,10 @@ private:
     int consecutive_failures_ = 0;
     std::chrono::steady_clock::time_point first_failure_time_;
     std::chrono::steady_clock::time_point last_encode_time_;
+
+    // 首帧容忍相关
+    std::chrono::steady_clock::time_point first_grab_attempt_time_;
+    std::atomic<bool> first_frame_seen_{false};
 
     // 优化：休眠控制相关
     std::mutex sleep_mutex_;

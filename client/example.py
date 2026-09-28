@@ -42,7 +42,7 @@ from remote_capture import (
 
 # ==================== 配置 ====================
 
-SERVER = os.getenv("GRPC_SERVER", "127.0.0.1:50051")
+SERVER = os.getenv("GRPC_SERVER", "127.0.0.1:50052")
 # 请替换为你实际可用的 RTSP 地址
 RTSP_URL = os.getenv(
     "RTSP_URL",
@@ -154,7 +154,7 @@ def example_poll_frame(decoder_type: int = DECODER_CPU_FFMPEG,
                 if fail_count > 30:
                     print("  连续获取失败次数过多，退出")
                     break
-                time.sleep(0.05)
+                time.sleep(1)
 
         elapsed = time.time() - start
         print(f"\n读取 {ok_count} 帧, 失败 {fail_count} 次, 耗时 {elapsed:.2f}s, "
@@ -165,7 +165,7 @@ def example_poll_frame(decoder_type: int = DECODER_CPU_FFMPEG,
 
 # ==================== 示例 3: 服务端流式推送 (gRPC streaming) ====================
 
-def example_stream_frames(save_images: bool = False, max_frames: int = 100):
+def example_stream_frames(save_images: bool = True, max_frames: int = 100):
     """
     使用服务端流式推送 StreamFrames 获取帧
 
@@ -231,8 +231,8 @@ def example_stream_frames(save_images: bool = False, max_frames: int = 100):
 # ==================== 示例 4: 共享内存读帧 (SHM) ====================
 
 def example_shared_memory(blocking: bool = True,
-                          duration_sec: int = 10,
-                          decoder_type: int = DECODER_GPU_NVCUVID):
+                          duration_sec: int = 100,
+                          decoder_type: int = DECODER_CPU_FFMPEG):
     """
     通过共享内存零拷贝读取原始帧
 

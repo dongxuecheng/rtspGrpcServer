@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <chrono>
 
 // 假设这些头文件在您的包含路径中
 #include "ffmpeg_demuxer.hpp"
@@ -57,4 +58,6 @@ private:
     int64_t last_pts_ = 0;
     AVFrame *current_frame_ = nullptr;     // 保存当前 grab 到的帧
     std::atomic<bool> frame_ready_{false}; // 标志位：是否有一帧准备好被 retrieve
+
+    std::chrono::steady_clock::time_point open_time_; // demuxer/decoder 创建时间，用于首帧阶段判断
 };

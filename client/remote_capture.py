@@ -167,6 +167,93 @@ class _NotifySemaphore:
             _libc.sem_close(self._sem)
             self._sem = None
 
+# ==== 共享内存布局常量（必须与 C++ include/zero_copy_channel.hpp 保持一致）====
+# ⚠️ 这里只是**兜底值**：真正权威的偏移来自服务端 GetShmLayout（C++ 用 offsetof/sizeof 计算）。
+# 对应 C++ 的 ShmFrameSlot：
+#   sequence (8B)  @ 0
+#   对齐填充        [8, 64)   ← 因为 ShmMeta 带 alignas(64)
+#   ShmMeta        @ 64，sizeof(ShmMeta) = 64（48B 数据 + 16B 尾部填充）
+#   payload        @ 128
+# 注意：不要按“注释/直觉”改成 8/48/56，务必以 GetShmLayout 返回值为准。
+SHM_SLOT_COUNT = 3                                             # constexpr int SHM_SLOT_COUNT
+SHM_ALIGNMENT = 64                                             # alignas(64)
+SHM_SEQ_OFFSET = 0                                             # offsetof(ShmFrameSlot, sequence)
+SHM_META_OFFSET = 64                                           # offsetof(ShmFrameSlot, meta)（被 alignas(64) 抬高）
+SHM_META_DATA_SIZE = 64                                        # sizeof(ShmMeta)
+SHM_PAYLOAD_OFFSET = SHM_META_OFFSET + SHM_META_DATA_SIZE      # = 128
+SHM_HEAD_IDX_SIZE = 8                                          # sizeof(uint64_t)
+# 兜底默认值：C++ 端 DEFAULT_SHM_FRAME_BYTES = 3 * 1920 * 1080
+SHM_FALLBACK_MAX_FRAME_BYTES = 3 * 1920 * 1080
+
+# 服务端“运行中扩容”的探测参数：
+# 帧变大（分辨率切换）时服务端会 unlink 旧 SHM 并创建新对象（新 inode），
+# 客户端手里的旧映射会永远冻结在最后一帧，所以必须在“一段时间没有新帧”后
+# 校验文件身份（st_dev/st_ino/大小）并重新连接。
+SHM_RECONNECT_PROBE_INTERVAL_S = 0.5   # 探测间隔（秒），也是“多久无新帧才开始探测”
+SHM_WAIT_SLICE_MS = 200                # 阻塞读时信号量单次等待上限（毫秒）
+SHM_SEM_ATTACH_RETRY_S = 0.5           # 信号量打开失败后的重试间隔（秒）
+
+
+# 计算共享内存布局（与 C++ getShmLayoutInfo 保持一致）
+def _compute_shm_layout(max_frame_bytes: int) -> dict:
+    """根据单帧最大字节数计算完整布局（兜底用途，动态部分应以 SHM 文件大小为准）"""
+    # 每个 slot 的总大小 = 元数据区 + 最大帧数据，对齐到 64
+    SLOT_SIZE = align_up(SHM_PAYLOAD_OFFSET + max_frame_bytes, SHM_ALIGNMENT)
+
+    # head_idx 在所有 slot 之后
+    HEAD_IDX_OFFSET = SHM_SLOT_COUNT * SLOT_SIZE
+    # 总大小 = 所有 slot + head_idx（对齐到 8 字节）
+    TOTAL_SIZE = align_up(HEAD_IDX_OFFSET + SHM_HEAD_IDX_SIZE, SHM_HEAD_IDX_SIZE)
+
+    return {
+        "slot_count": SHM_SLOT_COUNT,
+        "max_frame_bytes": max_frame_bytes,
+        "alignment": SHM_ALIGNMENT,
+        "slot_size": SLOT_SIZE,
+        "seq_offset": SHM_SEQ_OFFSET,
+        "meta_offset": SHM_META_OFFSET,
+        "payload_offset": SHM_PAYLOAD_OFFSET,
+        "meta_data_size": SHM_META_DATA_SIZE,
+        "head_idx_offset": HEAD_IDX_OFFSET,
+        "total_size": TOTAL_SIZE,
+    }
+
+
+def derive_shm_layout_from_size(file_size: int,
+                               payload_offset: int = SHM_PAYLOAD_OFFSET) -> Optional[dict]:
+    """由共享内存对象的实际字节数反推布局（动态部分）。
+
+    服务端会根据每路流的实际分辨率动态决定 max_frame_bytes（见 stream_task.cpp 中的
+    ensureShmChannel），客户端无法凭空算出 slot_size。但 C++ 端的布局公式保证：
+
+        total_size = SHM_SLOT_COUNT * slot_size + 8
+        slot_size  = align_up(payload_offset + max_frame_bytes, 64)
+
+    因此文件大小可以唯一确定 slot_size（64 的整数倍），从而得到全部偏移量。
+    payload_offset 取自服务端 GetShmLayout（兜底为常量），因为它是 C++ 结构体布局决定的。
+    派生出的 max_frame_bytes 是 payload 容量上界（>= 服务端实际值），仅用于校验。
+    """
+    if not file_size or file_size <= SHM_HEAD_IDX_SIZE:
+        return None
+    if (file_size - SHM_HEAD_IDX_SIZE) % SHM_SLOT_COUNT != 0:
+        return None
+    slot_size = (file_size - SHM_HEAD_IDX_SIZE) // SHM_SLOT_COUNT
+    if slot_size % SHM_ALIGNMENT != 0 or slot_size <= payload_offset:
+        return None
+    return {
+        "slot_count": SHM_SLOT_COUNT,
+        "max_frame_bytes": slot_size - payload_offset,
+        "alignment": SHM_ALIGNMENT,
+        "slot_size": slot_size,
+        "seq_offset": SHM_SEQ_OFFSET,
+        "meta_offset": SHM_META_OFFSET,
+        "payload_offset": payload_offset,
+        "meta_data_size": SHM_META_DATA_SIZE,
+        "head_idx_offset": SHM_SLOT_COUNT * slot_size,
+        "total_size": file_size,
+    }
+
+
 class _ShmReader:
     """共享内存帧读取器（内部使用）"""
 
@@ -177,48 +264,86 @@ class _ShmReader:
         self.UINT64_SIZE = 8
         self.UINT32_SIZE = 4
 
+        # 结构体偏移：优先取服务端 GetShmLayout 的返回值（C++ 用 offsetof/sizeof 计算，权威），
+        # 兜底用本模块常量（与 ShmFrameSlot 一致：seq@0 / meta@64 / payload@128）。
+        # 注意 ShmMeta 带 alignas(64)，所以 meta 偏移与 sizeof 都是 64。
         if layout_info:
-            # 使用服务端 GetShmLayout 返回的实际布局，避免硬编码出错
-            self.ALIGNMENT = layout_info["alignment"]
-            self.MAX_FRAME_BYTES = layout_info["max_frame_bytes"]
-            self.SLOT_COUNT = layout_info["slot_count"]
-            self.META_DATA_SIZE = layout_info["meta_data_size"]
-            self.SEQ_OFFSET = layout_info["seq_offset"]
-            self.META_OFFSET = layout_info["meta_offset"]
-            self.PAYLOAD_OFFSET = layout_info["payload_offset"]
-            self.SLOT_SIZE = layout_info["slot_size"]
-            # meta 在内存中实际占用的对齐后大小
-            self.META_STRUCT_SIZE = self.PAYLOAD_OFFSET - self.META_OFFSET
-            
-            # 【优化】直接使用 C++ 端计算好的偏移和总大小
-            self.HEAD_IDX_OFFSET = layout_info.get("head_idx_offset")
-            self.TOTAL_SIZE = layout_info.get("total_size")
+            self.ALIGNMENT = int(layout_info.get("alignment", SHM_ALIGNMENT))
+            self.SLOT_COUNT = int(layout_info.get("slot_count", SHM_SLOT_COUNT))
+            self.SEQ_OFFSET = int(layout_info.get("seq_offset", SHM_SEQ_OFFSET))
+            self.META_OFFSET = int(layout_info.get("meta_offset", SHM_META_OFFSET))
+            self.META_DATA_SIZE = int(layout_info.get("meta_data_size", SHM_META_DATA_SIZE))
+            self.PAYLOAD_OFFSET = int(layout_info.get("payload_offset", SHM_PAYLOAD_OFFSET))
         else:
-            # 旧版服务端未实现 GetShmLayout 时的 fallback 硬编码
-            self.ALIGNMENT = 64
-            self.MAX_FRAME_BYTES = 3 * 2560 * 1440
-            self.SLOT_COUNT = 3
+            self.ALIGNMENT = SHM_ALIGNMENT
+            self.SLOT_COUNT = SHM_SLOT_COUNT
+            self.SEQ_OFFSET = SHM_SEQ_OFFSET
+            self.META_OFFSET = SHM_META_OFFSET
+            self.META_DATA_SIZE = SHM_META_DATA_SIZE
+            self.PAYLOAD_OFFSET = SHM_PAYLOAD_OFFSET
+        # meta 在内存中实际占用的对齐后大小
+        self.META_STRUCT_SIZE = self.PAYLOAD_OFFSET - self.META_OFFSET
 
-            self.META_DATA_SIZE = 4 * self.UINT64_SIZE + 4 * self.UINT32_SIZE
-            self.META_STRUCT_SIZE = align_up(self.META_DATA_SIZE, self.ALIGNMENT)
-
-            self.SEQ_OFFSET = 0
-            self.META_OFFSET = align_up(self.SEQ_OFFSET + self.UINT64_SIZE, self.ALIGNMENT)
-            self.PAYLOAD_OFFSET = self.META_OFFSET + self.META_STRUCT_SIZE
-
-            slot_raw_size = self.PAYLOAD_OFFSET + self.MAX_FRAME_BYTES
-            self.SLOT_SIZE = align_up(slot_raw_size, self.ALIGNMENT)
-            
-            # 【优化】Fallback 下自行计算
-            self.HEAD_IDX_OFFSET = align_up(self.SLOT_COUNT * self.SLOT_SIZE, self.ALIGNMENT)
-            self.TOTAL_SIZE = self.SLOT_COUNT * self.SLOT_SIZE + align_up(self.UINT64_SIZE, self.ALIGNMENT)
+        # 动态字段（slot_size / head_idx_offset / total_size / max_frame_bytes）先用
+        # 传入布局或默认布局占位，connect() 时会被 SHM 对象的实际大小覆盖
+        self._apply_layout(layout_info if layout_info else
+                           _compute_shm_layout(SHM_FALLBACK_MAX_FRAME_BYTES))
 
         self._mmap_obj: Optional[mmap.mmap] = None
         self._shm_view: Optional[memoryview] = None
         self._last_idx = -1
         self._connected = False
-        self._notify_sem: Optional[object] = None  # 替换为你实际的信号量类
+        self._notify_sem: Optional[object] = None
         self._blocking_mode_logged = False
+        # 服务端重建/扩容探测状态
+        self._identity: Optional[Tuple[int, int]] = None   # (st_dev, st_ino)
+        self._last_progress = time.monotonic()              # 最近一次成功取到新帧的时刻
+        self._last_probe = 0.0                              # 最近一次身份校验的时刻
+        # 通知信号量惰性重试状态
+        self._next_sem_attach = 0.0
+        self._polling_mode_logged = False
+
+    def _apply_layout(self, layout: dict) -> None:
+        """应用布局中的动态部分"""
+        self.SLOT_SIZE = int(layout["slot_size"])
+        self.HEAD_IDX_OFFSET = int(layout["head_idx_offset"])
+        self.TOTAL_SIZE = int(layout["total_size"])
+        self.MAX_FRAME_BYTES = int(layout["max_frame_bytes"])
+
+    def _refresh_layout_from_shm_size(self, fd: int) -> bool:
+        """以 SHM 对象的实际大小为准修正布局。
+
+        服务端按每路流的分辨率动态分配 SHM 大小（total_size = 3 * slot_size + 8），
+        因此绝不能用客户端自己估算的 max_frame_bytes 去计算偏移，否则 slot_size /
+        head_idx_offset 会错位（旧实现正是如此，永远读不到帧）。
+        """
+        try:
+            st = os.fstat(fd)
+        except OSError as e:
+            logger.warning(f"[_ShmReader] fstat 共享内存失败，沿用已有布局: {e}")
+            return False
+
+        file_size = st.st_size
+        # 记录对象身份，供 _maybe_reconnect 判断服务端是否已重建
+        self._identity = (st.st_dev, st.st_ino)
+
+        derived = derive_shm_layout_from_size(file_size, self.PAYLOAD_OFFSET)
+        if derived is None:
+            logger.error(
+                f"[_ShmReader] 共享内存大小 {file_size} 与当前布局公式不匹配"
+                f"（期望 total = {self.SLOT_COUNT} * slot_size + {SHM_HEAD_IDX_SIZE}），"
+                f"请检查客户端与服务端版本是否一致"
+            )
+            return False
+
+        if derived["slot_size"] != self.SLOT_SIZE:
+            logger.info(
+                f"[_ShmReader] 按 SHM 实际大小校正布局: slot_size {self.SLOT_SIZE} -> "
+                f"{derived['slot_size']} (max_frame_bytes={derived['max_frame_bytes']}, "
+                f"total_size={derived['total_size']})"
+            )
+        self._apply_layout(derived)
+        return True
 
     def __del__(self):
         try:
@@ -237,19 +362,22 @@ class _ShmReader:
             if os.path.exists(path):
                 try:
                     fd = os.open(path, os.O_RDONLY)
-                    # 【优化】直接使用 self.TOTAL_SIZE
+                    # 布局必须来自 SHM 对象本身（服务端按分辨率动态分配大小），
+                    # 不能沿用调用方估算的 max_frame_bytes，否则偏移会错位
+                    self._refresh_layout_from_shm_size(fd)
                     total_size = self.TOTAL_SIZE
                     self._mmap_obj = mmap.mmap(fd, total_size, prot=mmap.PROT_READ)
                     self._shm_view = memoryview(self._mmap_obj)
                     os.close(fd)
-                    try:
-                        # 假设 _NotifySemaphore 在你的上下文里已定义
-                        self._notify_sem = _NotifySemaphore(f"/{self.stream_id}_notify") # type: ignore
-                        logger.info(f"✓ SHM notify semaphore connected: /{self.stream_id}_notify")
-                    except Exception as e:
-                        logger.warning(f"SHM notify semaphore not available (will use polling fallback): {e}")
-                        self._notify_sem = None
+                    # 通知信号量可能比 SHM 文件晚一点出现（服务端创建顺序 / 扩容重建），
+                    # 失败时不要永久退化成轮询，read() 里还会按间隔重试
+                    self._next_sem_attach = 0.0
+                    self._try_attach_notify_sem()
                     self._connected = True
+                    # 新对象：head_idx 从 0 重新开始，清空进度/序号状态
+                    self._last_idx = -1
+                    self._last_progress = time.monotonic()
+                    self._last_probe = 0.0
                     logger.debug(f"✓ SHM connected: {path}")
                     return True
                 except Exception as e:
@@ -365,47 +493,108 @@ class _ShmReader:
             logger.debug(f"retrieve error: {e}")
             return None, 0
 
+    def _try_attach_notify_sem(self) -> bool:
+        """惰性打开跨进程通知信号量（失败后按间隔重试）。
+
+        服务端创建 SHM 对象与创建信号量之间存在极短的时间窗（毫秒级）：shm_open
+        一执行 SHM 文件就对客户端可见，而客户端会立即 sem_open。若此时信号量还未
+        创建就会 ENOENT；信号量在服务端扩容重建时也会被重建。因此不能“一次失败就
+        永久退化为轮询”，必须按间隔重试。
+        """
+        if self._notify_sem is not None:
+            return True
+        now = time.monotonic()
+        if now < self._next_sem_attach:
+            return False
+        self._next_sem_attach = now + SHM_SEM_ATTACH_RETRY_S
+        try:
+            self._notify_sem = _NotifySemaphore(f"/{self.stream_id}_notify")
+        except Exception as e:
+            if not self._polling_mode_logged:
+                logger.warning(f"[_ShmReader] 通知信号量暂不可用，先使用轮询模式并定期重试: {e}")
+                self._polling_mode_logged = True
+            return False
+        if not self._blocking_mode_logged:
+            logger.info(f"[_ShmReader] Using semaphore blocking mode for {self.stream_id}")
+            self._blocking_mode_logged = True
+        return True
+
     def read(self, blocking: bool = False, timeout_ms: Optional[float] = None) -> Tuple[bool, Optional[np.ndarray], int]:
         if not blocking:
             return self._try_read()
 
-        if self._notify_sem:
-            if not self._blocking_mode_logged:
-                logger.info(f"[_ShmReader] Using semaphore blocking mode for {self.stream_id}")
-                self._blocking_mode_logged = True
+        deadline = None if timeout_ms is None else time.monotonic() + timeout_ms / 1000.0
+        sleep_ms = 1.0
+        while True:
+            # 信号量可能尚未创建（服务端 SHM/信号量创建的时间窗）或已被重建，惰性重试
+            self._try_attach_notify_sem()
+
             ok, img, ts = self._try_read()
             if ok:
                 return ok, img, ts
-            # 假定 _notify_sem.wait 是你的信号量等待机制
-            if not self._notify_sem.wait(timeout_ms): # type: ignore
+
+            now = time.monotonic()
+            if deadline is not None and now >= deadline:
                 return False, None, 0
-            return self._try_read()
-        else:
-            if not self._blocking_mode_logged:
-                logger.warning(f"[_ShmReader] Semaphore unavailable for {self.stream_id}, using adaptive polling fallback")
-                self._blocking_mode_logged = True
-            start = time.time()
-            sleep_ms = 1.0
-            max_sleep_ms = 50.0
-            while True:
-                ok, img, ts = self._try_read()
-                if ok:
-                    return ok, img, ts
-                if timeout_ms is not None:
-                    elapsed = (time.time() - start) * 1000
-                    if elapsed >= timeout_ms:
-                        return False, None, 0
-                    remaining = timeout_ms - elapsed
-                    if sleep_ms > remaining:
-                        sleep_ms = remaining
-                if sleep_ms > 0:
-                    time.sleep(sleep_ms / 1000.0)
-                sleep_ms = min(sleep_ms * 1.5, max_sleep_ms)
+            remaining_ms = None if deadline is None else (deadline - now) * 1000.0
+
+            if self._notify_sem:
+                # 分段等待：既尊重调用方超时，也保证能周期性发现服务端重建/扩容
+                # （否则旧信号量永远等不到 post，会阻塞死）
+                wait_ms = SHM_WAIT_SLICE_MS if remaining_ms is None else min(remaining_ms, SHM_WAIT_SLICE_MS)
+                self._notify_sem.wait(wait_ms)  # type: ignore
+                continue
+
+            # 无信号量时退化为自适应轮询（同时继续尝试获取信号量）
+            if remaining_ms is not None and sleep_ms > remaining_ms:
+                sleep_ms = remaining_ms
+            if sleep_ms > 0:
+                time.sleep(sleep_ms / 1000.0)
+            sleep_ms = min(sleep_ms * 1.5, 50.0)
+
+    def _maybe_reconnect(self) -> bool:
+        """检测服务端是否已重建/扩容 SHM，并重新连接。
+
+        服务端在帧变大时会 unlink 旧对象并创建新对象（新 inode），旧映射的内容会
+        永久冻结在最后一次写入，表现为“一直读不到新帧”。因此在连续一段时间没有
+        新帧后校验文件身份，一旦变化就重连（重算布局、重新 mmap、重新打开信号量）。
+        """
+        now = time.monotonic()
+        if now - self._last_progress < SHM_RECONNECT_PROBE_INTERVAL_S:
+            return False  # 还在正常收帧，无需探测
+        if now - self._last_probe < SHM_RECONNECT_PROBE_INTERVAL_S:
+            return False
+        self._last_probe = now
+
+        changed = False
+        for path in self.shm_paths:
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue  # 暂时不存在：服务端可能正处在 unlink -> create 之间
+            if self._identity is None or (st.st_dev, st.st_ino) != self._identity:
+                logger.warning(f"[_ShmReader] SHM 已被服务端重建，重新连接: {path}")
+                changed = True
+            elif st.st_size != self.TOTAL_SIZE:
+                logger.warning(
+                    f"[_ShmReader] SHM 大小已变化 ({self.TOTAL_SIZE} -> {st.st_size})，重新连接: {path}"
+                )
+                changed = True
+            break
+
+        if not changed:
+            return False
+        self.close()
+        return self.connect()
 
     def _try_read(self) -> Tuple[bool, Optional[np.ndarray], int]:
+        # 服务端扩容重建后旧映射会永久冻结，先探测并重连
+        self._maybe_reconnect()
         if not self.grab():
             return False, None, 0
         img, ts = self.retrieve()
+        if img is not None:
+            self._last_progress = time.monotonic()
         return (img is not None), img, ts
 
     def close(self):
@@ -562,11 +751,18 @@ class _BaseRTSPClient:
 
     @_grpc_retry(default_return=None)
     def get_shm_layout(self) -> Optional[dict]:
-        """从服务端获取共享内存布局信息；旧版服务端未实现则返回 None"""
+        """从服务端获取共享内存布局信息（含 C++ offsetof/sizeof 算出的结构体偏移）；旧版服务端未实现则返回 None。
+
+        注意：服务端按每路流的实际分辨率动态分配 SHM 大小，因此该接口返回的
+        slot_size / head_idx_offset / total_size 是**默认布局**，不可直接用于某一路流；
+        真正读取某一路流时：
+          - 结构体偏移（seq/meta/payload）用这里的返回值；
+          - 动态尺寸（slot_size/head_idx_offset/total_size）由 SHM 对象实际大小反推。
+        """
         if not self._ensure_stub():
             return None
-        req = stream_service_pb2.ShmLayoutRequest()
         try:
+            req = stream_service_pb2.ShmLayoutRequest()
             resp = self._stub.GetShmLayout(req, timeout=5)
             if resp.success:
                 layout = resp.layout
@@ -585,11 +781,12 @@ class _BaseRTSPClient:
             logger.warning(f"服务端返回 GetShmLayout 失败: {resp.message}")
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.UNIMPLEMENTED:
-                logger.debug("服务端未实现 GetShmLayout，SHM 使用本地硬编码布局")
+                logger.debug("服务端未实现 GetShmLayout，SHM 使用客户端兜底布局")
             else:
                 logger.error(f"获取 SHM 布局失败: {e.details()}")
         except Exception as e:
-            logger.error(f"获取 SHM 布局失败: {e}")
+            # 例如生成的 pb2 桩过旧（没有 ShmLayoutRequest）→ 回退到客户端兜底常量
+            logger.warning(f"获取 SHM 布局不可用，改用客户端兜底布局: {e}")
         return None
 
     def start_stream(self,
@@ -806,7 +1003,7 @@ class RTSPClient(_BaseRTSPClient):
         self._stream_modes: Dict[str, bool] = {}      # stream_id -> use_shared_mem 缓存
         self._stream_params: Dict[str, dict] = {}      # original_stream_id -> 启动参数
         self._stream_id_map: Dict[str, str] = {}       # original_stream_id -> current_stream_id
-        self._shm_layout: Optional[dict] = None        # 服务端 SHM 布局缓存
+        self._shm_layout: Optional[dict] = None        # 服务端 GetShmLayout 缓存（结构体偏移）
         # 注册进程退出兜底清理：避免客户端异常退出后 mmap 长期占用 tmpfs 空间
         atexit.register(_cleanup_client_on_exit, weakref.ref(self))
 
@@ -1022,16 +1219,24 @@ class RTSPClient(_BaseRTSPClient):
         reader = self._shm_readers.get(stream_id)
         if reader is not None:
             if not reader.exists():
-                logger.error(
-                    f"[RTSPClient] 共享内存已消失: /dev/shm/{stream_id}，"
+                # 服务端扩容时会 unlink 旧对象再创建新对象，存在极短的窗口期；
+                # 也可能是流已停止/服务端重启，下一次调用会自动重试。
+                logger.warning(
+                    f"[RTSPClient] 共享内存当前不可见（可能正在扩容重建或流已停止）: /dev/shm/{stream_id}，"
                     f"请确认客户端与服务端在同一主机且 Docker 挂载了 -v /dev/shm:/dev/shm"
                 )
                 return None
             return reader
 
+        # 不再由客户端推算布局：服务端会按每路流的实际分辨率动态分配 SHM 大小，
+        # 客户端过去用 width*height*3*1.25 猜测 max_frame_bytes，与服务端实际布局不一致，
+        # 导致 slot_size / head_idx_offset 错位、mmap 长度超过文件大小而永远读不到帧。
+        # 真实布局在 _ShmReader.connect() 中由 SHM 对象的实际大小反推得到。
+        #
+        # 结构体偏移（seq/meta/payload）则以服务端 GetShmLayout 为准：ShmMeta 带
+        # alignas(64)，客户端“按直觉”硬编码会在 meta 偏移上出错（读到全 0 → 丢弃所有帧）。
         if self._shm_layout is None:
-            self._shm_layout = self.get_shm_layout()
-
+            self._shm_layout = self.get_shm_layout()  # 失败返回 None，此时用客户端兜底常量
         reader = _ShmReader(stream_id, layout_info=self._shm_layout)
         if not reader.exists():
             logger.error(
@@ -1110,11 +1315,12 @@ class RTSPClient(_BaseRTSPClient):
                 if resp.success and resp.image_data:
                     img = self._decode_jpeg(resp.image_data)
                     return frame_seq, img
-                # 记录无帧原因，便于诊断
+                # 记录无帧原因，便于诊断（区分“流不存在/已过期”与“已连接但暂无帧”）
                 logger.info(
                     f"[RTSPClient] GetLatestFrame 无帧: "
                     f"stream_id={current_id}, success={resp.success}, "
-                    f"has_data={bool(resp.image_data)}, frame_seq={frame_seq}"
+                    f"has_data={bool(resp.image_data)}, frame_seq={frame_seq}, "
+                    f"message={resp.message!r}"
                 )
                 return frame_seq, None
             except grpc.RpcError as e:
