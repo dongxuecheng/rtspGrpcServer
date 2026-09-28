@@ -107,6 +107,9 @@ private:
     void stepIO();
     void ioLoop();
 
+    // 共享内存通道：首次按实际帧大小创建；帧变大（分辨率切换）时自动扩容重建
+    void ensureShmChannel(const cv::Mat &frame);
+
     // 阶段2：计算操作 (Decode / Convert / Encode) -> 运行在 计算线程池
     void stepCompute();
 

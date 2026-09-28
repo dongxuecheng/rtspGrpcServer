@@ -200,43 +200,48 @@ static bool fetchJpegFrame(streamingservice::RTSPStreamService::Stub &stub,
     return true;
 }
 
+// 服务端（zero_copy_channel.hpp）按每路流的实际分辨率动态决定 SHM 大小：
+//     total_size = SHM_SLOT_COUNT * slot_size + sizeof(uint64_t)
+//     slot_size  = align_up(PAYLOAD_OFFSET + max_frame_bytes, 64)   // 64 的整数倍
+// 因此由共享内存对象的实际字节数可以唯一反推出 slot_size / head_idx_offset，
+// 不能直接使用 GetShmLayout 返回的默认布局（默认布局只适用于未启用动态大小的流）。
+static bool deriveLayoutFromFileSize(off_t file_size, ShmLayout &layout)
+{
+    if (file_size <= static_cast<off_t>(sizeof(uint64_t)) || layout.slot_count == 0)
+    {
+        return false;
+    }
+
+    const uint64_t size = static_cast<uint64_t>(file_size);
+    if ((size - sizeof(uint64_t)) % layout.slot_count != 0)
+    {
+        return false;
+    }
+
+    const uint64_t slot_size = (size - sizeof(uint64_t)) / layout.slot_count;
+    if (slot_size == 0 || slot_size % 64 != 0 || slot_size <= layout.payload_offset)
+    {
+        return false;
+    }
+
+    layout.slot_size = slot_size;
+    layout.head_idx_offset = layout.slot_count * slot_size;
+    layout.total_size = size;
+    // payload 容量上界（slot_size >= payload_offset + max_frame_bytes），仅用于校验
+    layout.max_frame_bytes = slot_size - layout.payload_offset;
+    return true;
+}
+
 class ShmReader
 {
 public:
     ShmReader(const std::string &stream_id, const ShmLayout &layout)
-        : stream_id_(stream_id), layout_(layout), base_(nullptr), last_idx_(0)
+        : stream_id_(stream_id), path_("/dev/shm/" + stream_id), base_layout_(layout)
     {
-        std::string path = "/dev/shm/" + stream_id;
-        fd_ = ::open(path.c_str(), O_RDONLY);
-        if (fd_ < 0)
-        {
-            std::cerr << "open SHM failed: " << path << " errno=" << errno << "\n";
-            return;
-        }
-
-        base_ = static_cast<uint8_t *>(::mmap(nullptr, layout_.total_size, PROT_READ, MAP_SHARED, fd_, 0));
-        if (base_ == MAP_FAILED)
-        {
-            std::cerr << "mmap SHM failed: " << path << " errno=" << errno << "\n";
-            base_ = nullptr;
-            ::close(fd_);
-            fd_ = -1;
-        }
+        open();
     }
 
-    ~ShmReader()
-    {
-        if (base_)
-        {
-            ::munmap(base_, layout_.total_size);
-            base_ = nullptr;
-        }
-        if (fd_ >= 0)
-        {
-            ::close(fd_);
-            fd_ = -1;
-        }
-    }
+    ~ShmReader() { close(); }
 
     bool isValid() const { return base_ != nullptr; }
 
@@ -245,16 +250,30 @@ public:
         reason.clear();
         if (!base_)
         {
+            open(); // 服务端可能正在扩容重建（unlink -> create），重试一次
+        }
+        if (!base_)
+        {
             reason = "SHM not mapped";
             return false;
         }
 
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        auto last_progress = std::chrono::steady_clock::now();
         while (std::chrono::steady_clock::now() < deadline)
         {
             if (tryRead(frame, timestamp, reason))
             {
+                last_progress = std::chrono::steady_clock::now();
                 return true;
+            }
+            // 服务端扩容会 unlink 旧对象并重建（新 inode），旧映射内容会永久冻结，
+            // 因此在超时时间内周期性校验文件身份并重连
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_progress >= std::chrono::milliseconds(REFRESH_PROBE_MS))
+            {
+                refreshIfStale();
+                last_progress = now;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -263,6 +282,7 @@ public:
     }
 
 private:
+    static constexpr int REFRESH_PROBE_MS = 300; // 无新帧多久后校验一次 SHM 身份
     bool tryRead(cv::Mat &frame, uint64_t &timestamp, std::string &reason)
     {
         reason.clear();
@@ -369,10 +389,106 @@ private:
     }
 
     std::string stream_id_;
-    ShmLayout layout_;
+    std::string path_;
+    ShmLayout base_layout_;   // 服务端返回的布局（结构常量来源；动态部分会被文件大小修正）
+    ShmLayout layout_;        // 实际使用的布局（按 SHM 文件大小推导后）
     int fd_ = -1;
     uint8_t *base_ = nullptr;
     uint64_t last_idx_ = 0;
+    dev_t dev_ = 0;           // 已映射对象的身份，用于检测服务端重建
+    ino_t ino_ = 0;
+
+    bool open()
+    {
+        if (base_)
+        {
+            return true;
+        }
+        fd_ = ::open(path_.c_str(), O_RDONLY);
+        if (fd_ < 0)
+        {
+            std::cerr << "open SHM failed: " << path_ << " errno=" << errno << "\n";
+            return false;
+        }
+
+        // 服务端按每路流的实际分辨率动态分配 SHM 大小（且运行中可能扩容重建），
+        // GetShmLayout 返回的是默认布局，所以必须用 SHM 对象的实际大小反推真实布局。
+        layout_ = base_layout_;
+        struct stat st {};
+        if (::fstat(fd_, &st) == 0)
+        {
+            dev_ = st.st_dev;
+            ino_ = st.st_ino;
+
+            ShmLayout derived = layout_;
+            if (deriveLayoutFromFileSize(st.st_size, derived))
+            {
+                if (derived.slot_size != layout_.slot_size)
+                {
+                    std::cerr << "[SHM] layout corrected from file size for " << stream_id_
+                              << ": slot_size " << layout_.slot_size << " -> "
+                              << derived.slot_size << ", max_frame_bytes="
+                              << derived.max_frame_bytes << "\n";
+                }
+                layout_ = derived;
+            }
+            else
+            {
+                std::cerr << "[SHM] size " << st.st_size << " does not match layout formula for "
+                          << stream_id_ << ", fallback to server layout\n";
+            }
+        }
+
+        base_ = static_cast<uint8_t *>(::mmap(nullptr, layout_.total_size, PROT_READ, MAP_SHARED, fd_, 0));
+        if (base_ == MAP_FAILED)
+        {
+            std::cerr << "mmap SHM failed: " << path_ << " errno=" << errno << "\n";
+            base_ = nullptr;
+            ::close(fd_);
+            fd_ = -1;
+            return false;
+        }
+
+        last_idx_ = 0; // 新对象：head_idx 从 0 重新开始
+        return true;
+    }
+
+    void close()
+    {
+        if (base_)
+        {
+            ::munmap(base_, layout_.total_size);
+            base_ = nullptr;
+        }
+        if (fd_ >= 0)
+        {
+            ::close(fd_);
+            fd_ = -1;
+        }
+        dev_ = 0;
+        ino_ = 0;
+    }
+
+    // 服务端帧变大时会 unlink 旧 SHM 并创建新对象，此时旧映射的内容会永久冻结在最后一帧。
+    // 用文件身份（dev/ino）和大小判断是否需要重新连接。
+    bool refreshIfStale()
+    {
+        struct stat st {};
+        if (::stat(path_.c_str(), &st) != 0)
+        {
+            return false; // 暂不存在：可能处在 unlink -> create 窗口
+        }
+        if (st.st_dev == dev_ && st.st_ino == ino_ &&
+            static_cast<uint64_t>(st.st_size) == layout_.total_size)
+        {
+            return false;
+        }
+
+        std::cerr << "[SHM] " << stream_id_ << " recreated (size " << st.st_size
+                  << "), reconnecting\n";
+        close();
+        return open();
+    }
 };
 
 static std::string sanitizeFilename(const std::string &name)
@@ -462,9 +578,8 @@ int main(int argc, char **argv)
             shm_reader = std::make_unique<ShmReader>(info.stream_id, layout);
             if (!shm_reader->isValid())
             {
-                std::cout << "  -> skip: SHM open failed\n\n";
-                failed++;
-                continue;
+                // 服务端可能正处在扩容重建窗口（unlink -> create），read() 内部会重试
+                std::cout << "  -> warning: SHM not available yet (server may be resizing), will retry\n";
             }
         }
 

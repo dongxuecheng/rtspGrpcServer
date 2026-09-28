@@ -626,6 +626,47 @@ void StreamTask::stepIO()
     }
 }
 
+// 按需创建 / 扩容共享内存通道。
+//
+// - 创建：首次解码成功后才调，此时才知道真实帧尺寸（每路流可不一样）；
+// - 扩容：后续帧比当前容量大时（UpdateStream 切到更高分辨率、解码器换流等）重建。
+//
+// 扩容采用“unlink 旧对象 + 创建新对象”的方式（新 inode），因此已经映射了旧对象的
+// 客户端会一直读到冻结的最后一帧，必须由客户端自行检测（文件 dev/ino/大小变化）并重连：
+//   - Python: client/remote_capture.py::_ShmReader._maybe_reconnect()
+//   - C++   : tools/save_frames.cpp::ShmReader::refreshIfStale()
+void StreamTask::ensureShmChannel(const cv::Mat &frame)
+{
+    const size_t frame_bytes = frame.total() * frame.elemSize();
+    if (shm_channel_ && frame_bytes <= shm_channel_->maxFrameBytes())
+    {
+        return; // 现有容量够用
+    }
+
+    // 预留 25% 余量，尽量避免分辨率小幅波动就重建（重建会打断已连接的客户端）
+    const size_t capacity = frame_bytes + frame_bytes / 4;
+
+    if (shm_channel_)
+    {
+        spdlog::warn("[StreamTask] Frame {} bytes exceeds SHM capacity {} for stream {}, rebuilding SHM ({} bytes/slot)",
+                     frame_bytes, shm_channel_->maxFrameBytes(), stream_id_, capacity);
+        shm_channel_->cleanup(); // unlink 旧对象：已连接的客户端需要重新连接
+        shm_channel_.reset();
+    }
+
+    try
+    {
+        shm_channel_ = std::make_unique<ZeroCopyChannel>(stream_id_, 0, capacity);
+        spdlog::info("SharedMemory ready for stream: {} ({}x{}x{}, {} bytes/frame, capacity {} bytes/slot)",
+                     stream_id_, frame.cols, frame.rows, frame.channels(), frame_bytes, capacity);
+    }
+    catch (const std::exception &e)
+    {
+        shm_channel_.reset();
+        spdlog::error("Failed to init SHM for stream {}: {}", stream_id_, e.what());
+    }
+}
+
 void StreamTask::stepCompute()
 {
     auto compute_start = std::chrono::steady_clock::now();
@@ -663,22 +704,8 @@ void StreamTask::stepCompute()
         bool retrieved = decoder_->retrieve(reusable_frame_, true);
         if (retrieved && !reusable_frame_.empty())
         {
-            // 首次解码成功后，按实际帧分辨率创建 SHM
-            if (!shm_channel_)
-            {
-                size_t frame_bytes = reusable_frame_.total() * reusable_frame_.elemSize();
-                try
-                {
-                    shm_channel_ = std::make_unique<ZeroCopyChannel>(stream_id_, 0, frame_bytes);
-                    spdlog::info("SharedMemory initialized for stream: {} ({}x{}x{}, {} bytes/slot)",
-                                 stream_id_, reusable_frame_.cols, reusable_frame_.rows,
-                                 reusable_frame_.channels(), frame_bytes);
-                }
-                catch (const std::exception &e)
-                {
-                    spdlog::error("Failed to init SHM for stream {}: {}", stream_id_, e.what());
-                }
-            }
+            // 首次解码成功后按实际帧大小创建 SHM；后续帧变大（如分辨率切换）时自动扩容重建
+            ensureShmChannel(reusable_frame_);
 
             if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_))
             {

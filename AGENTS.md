@@ -319,7 +319,9 @@ python example.py [编号]      # 编号 1-10，或 all 顺序运行全部
 ## 开发提示
 
 - **proto 文件同步**：`stream_service.proto` 在根目录和 `client/` 下各有一份。修改后需要同时更新，并重新生成 C++ 和 Python 的 protobuf/gRPC 代码。
-- **共享内存布局一致性**：C++ 端的 `zero_copy_channel.hpp` 中定义了 `ShmMeta` / `ShmFrameSlot` 的内存布局（`alignas(64)`）。Python 客户端（`remote_capture.py` 中的 `_ShmReader`）硬编码了相同的布局计算逻辑，**任何修改都必须双向同步**。
+- **共享内存布局一致性**：C++ 端 `include/zero_copy_channel.hpp` 中的 `ShmMeta` **带 `alignas(64)`**，因此真实布局是：`sequence@0`、`meta@64`（不是 8）、`sizeof(ShmMeta)=64`（不是 48）、**payload@128**（不是 56）、`sizeof(ShmFrameSlot)=128`；`static_assert` 已把这些值固化。**消费端一律不要硬编码这些偏移**，应使用 `GetShmLayout` 返回的偏移（C++ 用 `offsetof/sizeof` 算）：Python 客户端 `_ShmReader` 优先取服务端偏移（兜底常量仅为兼容旧桩），C++ 工具见 `tools/save_frames.cpp`。历史上就因为头文件里一行过时注释（`// 48 bytes, offset 8`）导致 Python 硬编码错偏移，所有帧被当成 `size==0` 丢弃（表现为“能连上但 0 帧”）。
+- **SHM 动态大小与运行中扩容**：`StreamTask::ensureShmChannel()` 在首帧解码后按实际帧大小创建 SHM（+25% 余量），帧变大（分辨率切换、`UpdateStream`）时会 `unlink` 旧对象并创建新对象（新的 inode）。因此**布局不能用 `GetShmLayout`（它只返回默认布局）**，消费端必须由 SHM 对象的实际文件大小反推（`total_size = 3 * slot_size + 8`，slot_size 为 64 的倍数）：Python 见 `derive_shm_layout_from_size()`，C++ 工具见 `tools/save_frames.cpp::deriveLayoutFromFileSize()`。由于旧映射在重建后会永久冻结在最后一帧，消费端还需在“一段时间没有新帧”后校验文件身份（`st_dev`/`st_ino`/大小）并重连：`_ShmReader._maybe_reconnect()` / `ShmReader::refreshIfStale()`；阻塞读必须分段等待信号量（`SHM_WAIT_SLICE_MS`），否则旧信号量等不到 `sem_post` 会卡死。
+- **信号量必须先于 SHM 创建**：`ZeroCopyChannel` 构造函数中 `sem_open` 在 `shm_open` **之前**执行。因为 `shm_open(O_CREAT)` 会让 SHM 文件立刻对客户端可见，客户端一看到文件就会 `sem_open`；若信号量晚于 SHM 出现，客户端会因 ENOENT 退化到轮询模式（客户端另有 `_ShmReader._try_attach_notify_sem()` 做惰性重试与自动升级作为兜底）。
 - **海康 SDK 放置**：`CMakeLists.txt` 默认在 `${CMAKE_SOURCE_DIR}/sdk/hikvision` 下查找 SDK 头文件（`hik_header/HCNetSDK.h`）和库文件（`hik_libs/libhcnetsdk.so` 等）。可通过 `-DHIKVISION_SDK_ROOT=/path/to/sdk` 指定其他路径；若未找到，CMake 会警告，`src/hik.cpp` / `src/hik_decoder.cpp` 不会被编译，`DECODER_HIK_SDK` 将降级为 CPU 解码器并运行时报错。
 - **Docker 中的海康 SDK**：`Dockerfile` / `Dockerfile.cpu` 会把 `sdk/hikvision` 复制到镜像 `/opt/hikvision`，并通过 `LD_LIBRARY_PATH` 和 `ldconfig` 使其可被 `rtsp_server` 加载。`entrypoint.sh` 也做了兜底导出。
 - **CUDA 架构**：`CMakeLists.txt` 中硬编码了 `75 80 86 89` 四个架构，如需支持新 GPU 需要修改此处。

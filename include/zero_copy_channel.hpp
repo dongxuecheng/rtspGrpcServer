@@ -36,22 +36,36 @@ struct alignas(64) ShmMeta
 };
 
 // 注意：ShmFrameSlot 只包含元数据，不包含 payload。
-// payload 紧跟 sizeof(ShmFrameSlot) 之后，slot 的总大小 = sizeof(ShmFrameSlot) + max_frame_bytes（对齐后）
+// payload 紧跟元数据区之后，slot 总大小 = align_up(SLOT_META_SIZE + max_frame_bytes, 64)
+//
+// ⚠️ ShmMeta 带 alignas(64)，因此真实布局是：
+//     offsetof(ShmFrameSlot, sequence) = 0
+//     offsetof(ShmFrameSlot, meta)     = 64   ← 不是 8（sequence 后有 56 字节填充）
+//     sizeof(ShmMeta)                  = 64   ← 不是 48
+//     payload 偏移（SLOT_META_SIZE）    = 128  ← 不是 56/64
+//      sizeof(ShmFrameSlot)            = 128
+// 消费端（Python 客户端、tools/*）一律不要硬编码这些偏移，请使用 GetShmLayout 的返回值。
 struct alignas(64) ShmFrameSlot
 {
     std::atomic<uint64_t> sequence{0};   // 8 bytes, offset 0
-    ShmMeta meta;                        // 48 bytes, offset 8
-    // sizeof(ShmFrameSlot) = 64 (padded to alignas(64))
+    ShmMeta meta;                        // offset 64（alignas(64) 插入填充）
+    // sizeof(ShmFrameSlot) = 128 (8 + 56 padding + 64)
 };
 
+// 布局自检：上述数值是消费端/文档的约定，改动结构体时必须同步更新（否则编译期报错）
+static_assert(offsetof(ShmFrameSlot, sequence) == 0, "sequence 应位于槽位起始处");
+static_assert(offsetof(ShmFrameSlot, meta) == 64, "ShmMeta 带 alignas(64)，meta 偏移应为 64");
+static_assert(sizeof(ShmMeta) == 64, "sizeof(ShmMeta) 应为 64");
+static_assert(sizeof(ShmFrameSlot) == 128, "sizeof(ShmFrameSlot) 应为 128");
+
 // 共享内存布局（运行时计算）：
-//   [slot 0 metadata (64B)] [slot 0 payload (max_frame_bytes)] [padding to 64]
-//   [slot 1 metadata (64B)] [slot 1 payload (max_frame_bytes)] [padding to 64]
-//   [slot 2 metadata (64B)] [slot 2 payload (max_frame_bytes)] [padding to 64]
+//   [slot 0 metadata (sizeof(ShmFrameSlot)=128B)] [slot 0 payload (max_frame_bytes)] [padding to 64]
+//   [slot 1 metadata (128B)] [slot 1 payload (max_frame_bytes)] [padding to 64]
+//   [slot 2 metadata (128B)] [slot 2 payload (max_frame_bytes)] [padding to 64]
 //   [head_idx (8B)]
 //
-// 每个 slot 的 payload 偏移量 = sizeof(ShmFrameSlot) = 64（对齐后）
-// 每个 slot 的总大小      = align_up(64 + max_frame_bytes, 64)
+// 每个 slot 的 payload 偏移量 = SLOT_META_SIZE = 128
+// 每个 slot 的总大小        = align_up(128 + max_frame_bytes, 64)
 
 // C++ 端共享内存布局描述（用于填充 protobuf 返回给 Python 客户端）
 struct ShmLayoutInfo
@@ -84,8 +98,8 @@ static inline ShmLayoutInfo getShmLayoutInfo(size_t max_frame_bytes = DEFAULT_SH
     info.alignment = alignof(ShmFrameSlot);
     info.seq_offset = offsetof(ShmFrameSlot, sequence);
     info.meta_offset = offsetof(ShmFrameSlot, meta);
-    // payload 从元数据末尾开始（meta 结束偏移 = 8 + 48 = 56）。不使用
-    // sizeof(ShmFrameSlot)=64，因为 alignas(64) 填充的 8 字节不应计为 payload 偏移
+    // payload 从元数据末尾开始。注意 ShmMeta 带 alignas(64)：
+    // offsetof(ShmFrameSlot, meta) = 64、sizeof(ShmMeta) = 64 → SLOT_META_SIZE = 128
     constexpr size_t SLOT_META_SIZE = offsetof(ShmFrameSlot, meta) + sizeof(ShmMeta);
     info.payload_offset = SLOT_META_SIZE;
     info.meta_data_size = sizeof(ShmMeta);
@@ -106,7 +120,8 @@ public:
     // role: 0=生产者（服务端）, 1=消费者（客户端）
     // max_frame_bytes: 单帧最大字节数，不再写死在编译期
     ZeroCopyChannel(const std::string &stream_id, int role, size_t max_frame_bytes = DEFAULT_SHM_FRAME_BYTES)
-        : stream_id_(stream_id), role_(role), max_frame_bytes_(max_frame_bytes)
+        : stream_id_(stream_id), role_(role), max_frame_bytes_(max_frame_bytes),
+          shm_path_("/" + stream_id), sem_name_("/" + stream_id + "_notify")
     {
         // 计算运行时布局
         auto info = getShmLayoutInfo(max_frame_bytes_);
@@ -115,33 +130,59 @@ public:
         payload_offset_ = info.payload_offset;
         head_idx_offset_ = info.head_idx_offset;
 
-        std::string shm_path = "/" + stream_id_;
+        // 1. 先创建/打开通知信号量，再创建/映射 SHM。
+        //    shm_open(O_CREAT) 会让 SHM 文件立刻可见，而客户端一看到该文件就会
+        //    sem_open；如果信号量晚于 SHM 出现，客户端会因 ENOENT 退化成轮询模式。
+        if (role_ == 0)
+        {
+            // 临时清除 umask，确保信号量文件权限真正为 0666（跨用户/容器访问）
+            auto old_umask = umask(0);
+            notify_sem_ = sem_open(sem_name_.c_str(), O_CREAT | O_RDWR, 0666, 0);
+            umask(old_umask);
+        }
+        else
+        {
+            notify_sem_ = sem_open(sem_name_.c_str(), 0);
+        }
+        if (notify_sem_ == SEM_FAILED)
+        {
+            notify_sem_ = nullptr;
+            spdlog::warn("[ZeroCopyChannel] Notify semaphore unavailable for {} (errno={}), SHM will work without cross-process notify", stream_id_, errno);
+        }
+        else
+        {
+            spdlog::info("[ZeroCopyChannel] Notify semaphore ready: {} (role={})", sem_name_, role_ == 0 ? "producer" : "consumer");
+        }
 
+        // 2. 创建/映射共享内存
         if (role_ == 0)
         {
             // 临时清除 umask，确保共享内存文件权限真正为 0666（跨用户/容器访问）
             auto old_umask = umask(0);
-            shm_fd_ = shm_open(shm_path.c_str(), O_CREAT | O_RDWR, 0666);
+            shm_fd_ = shm_open(shm_path_.c_str(), O_CREAT | O_RDWR, 0666);
             umask(old_umask);
             if (shm_fd_ < 0)
             {
-                throw std::runtime_error("shm_open failed for " + shm_path + ": " + std::to_string(errno));
+                releaseSemaphoreOnFailure();
+                throw std::runtime_error("shm_open failed for " + shm_path_ + ": " + std::to_string(errno));
             }
             if (ftruncate(shm_fd_, total_size_) < 0)
             {
                 close(shm_fd_);
                 shm_fd_ = -1;
-                shm_unlink(shm_path.c_str());
-                throw std::runtime_error("ftruncate failed for " + shm_path + ": " + std::to_string(errno));
+                shm_unlink(shm_path_.c_str());
+                releaseSemaphoreOnFailure();
+                throw std::runtime_error("ftruncate failed for " + shm_path_ + ": " + std::to_string(errno));
             }
             base_ = (uint8_t *)mmap(nullptr, total_size_, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd_, 0);
         }
         else
         {
-            shm_fd_ = shm_open(shm_path.c_str(), O_RDONLY, 0666);
+            shm_fd_ = shm_open(shm_path_.c_str(), O_RDONLY, 0666);
             if (shm_fd_ < 0)
             {
-                throw std::runtime_error("shm_open (consumer) failed for " + shm_path + ": " + std::to_string(errno));
+                releaseSemaphoreOnFailure();
+                throw std::runtime_error("shm_open (consumer) failed for " + shm_path_ + ": " + std::to_string(errno));
             }
             base_ = (uint8_t *)mmap(nullptr, total_size_, PROT_READ, MAP_SHARED, shm_fd_, 0);
         }
@@ -155,9 +196,10 @@ public:
             }
             if (role_ == 0)
             {
-                shm_unlink(shm_path.c_str());
+                shm_unlink(shm_path_.c_str());
             }
-            throw std::runtime_error("mmap failed for " + shm_path + ": " + std::to_string(errno));
+            releaseSemaphoreOnFailure();
+            throw std::runtime_error("mmap failed for " + shm_path_ + ": " + std::to_string(errno));
         }
 
         // 初始化共享内存（生产者负责清零，避免消费者读到脏数据）
@@ -165,35 +207,15 @@ public:
         {
             std::memset(base_, 0, total_size_);
         }
-
-        // 创建/打开跨进程通知信号量（只有生产者需要创建）
-        std::string sem_name = "/" + stream_id_ + "_notify";
-        if (role_ == 0)
-        {
-            // 临时清除 umask，确保信号量文件权限真正为 0666（跨用户/容器访问）
-            auto old_umask = umask(0);
-            notify_sem_ = sem_open(sem_name.c_str(), O_CREAT | O_RDWR, 0666, 0);
-            umask(old_umask);
-        }
-        else
-        {
-            notify_sem_ = sem_open(sem_name.c_str(), 0);
-        }
-        if (notify_sem_ == SEM_FAILED)
-        {
-            spdlog::warn("[ZeroCopyChannel] Notify semaphore unavailable for {} (errno={}), SHM will work without cross-process notify", stream_id_, errno);
-            notify_sem_ = nullptr;
-        }
-        else
-        {
-            spdlog::info("[ZeroCopyChannel] Notify semaphore ready: {} (role={})", sem_name, role_ == 0 ? "producer" : "consumer");
-        }
     }
 
     ~ZeroCopyChannel()
     {
         cleanup();
     }
+
+    // 单帧最大字节数（slot payload 容量），供写入方判断是否需要扩容
+    size_t maxFrameBytes() const noexcept { return max_frame_bytes_; }
 
     // 禁止拷贝和移动，防止 double-close / double-munmap
     ZeroCopyChannel(const ZeroCopyChannel&) = delete;
@@ -335,8 +357,7 @@ public:
         // 只有生产者才有权限/义务从内核中删除共享内存对象
         if (role_ == 0)
         {
-            std::string shm_path = "/" + stream_id_;
-            if (shm_unlink(shm_path.c_str()) != 0)
+            if (shm_unlink(shm_path_.c_str()) != 0)
             {
                 if (errno != ENOENT)
                 {
@@ -354,8 +375,7 @@ public:
             sem_close(notify_sem_);
             if (role_ == 0)
             {
-                std::string sem_name = "/" + stream_id_ + "_notify";
-                if (sem_unlink(sem_name.c_str()) != 0)
+                if (sem_unlink(sem_name_.c_str()) != 0)
                 {
                     if (errno != ENOENT)
                     {
@@ -372,7 +392,24 @@ public:
     }
 
 private:
+    // 构造失败时释放已创建的通知信号量，避免留下孤儿 sem 文件
+    void releaseSemaphoreOnFailure()
+    {
+        if (!notify_sem_)
+        {
+            return;
+        }
+        sem_close(notify_sem_);
+        notify_sem_ = nullptr;
+        if (role_ == 0)
+        {
+            sem_unlink(sem_name_.c_str());
+        }
+    }
+
     std::string stream_id_;
+    std::string shm_path_;             // "/<stream_id>"
+    std::string sem_name_;             // "/<stream_id>_notify"
     int role_;
     int shm_fd_ = -1;
     uint8_t *base_ = nullptr;          // mmap 基地址（byte 指针便于指针运算）
