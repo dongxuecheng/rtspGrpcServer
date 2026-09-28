@@ -89,13 +89,22 @@
   <div class="row-between">
     <h2>预览 <span class="muted" id="preview-id"></span></h2>
     <div class="btn-row">
+      <label class="inline-field" title="画质越高越清晰但占用带宽越大；网络差时选“流畅”更实时">
+        画质
+        <select id="preview-quality">
+          <option value="480|60|8">流畅</option>
+          <option value="960|75|10" selected>标准</option>
+          <option value="1600|85|10">高清</option>
+        </select>
+      </label>
       <span class="muted" id="preview-stats"></span>
+      <button id="btn-preview-resync" title="丢弃已积压的缓冲，立即回到最新画面">重新同步</button>
       <button id="btn-snapshot">截图</button>
       <button id="btn-close-preview">关闭</button>
     </div>
   </div>
   <div class="preview-wrap">
-    <img id="preview-img" alt="流预览">
+    <canvas id="preview-canvas" hidden></canvas>
     <p class="muted center" id="preview-hint" hidden></p>
   </div>
 </section>

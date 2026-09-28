@@ -351,8 +351,13 @@ def api_mjpeg(stream_id: str,
                         continue
                     data = buf.tobytes()
                     _preview_sent(stream_id, ts)
-                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                           + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
+                    # 每个分片带上帧时间戳：浏览器据此计算“端到端延迟”（含隧道/网络积压），
+                    # 并在积压过大时重新连接以丢弃缓冲。额外的分片头对 <img> 无害。
+                    yield (b"--frame\r\n"
+                           b"Content-Type: image/jpeg\r\n"
+                           + b"Content-Length: " + str(len(data)).encode() + b"\r\n"
+                           + b"X-Frame-Ts: " + str(int(ts)).encode() + b"\r\n"
+                           + b"\r\n" + data + b"\r\n")
 
                     # 限速到目标帧率（只补足剩余的间隔时间）
                     time.sleep(max(0.0, period - (time.monotonic() - tick)))

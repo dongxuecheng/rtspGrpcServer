@@ -437,69 +437,269 @@ async function snapshot(streamId) {
   }
 }
 
-/* ==================== 预览 ==================== */
+/* ==================== 预览（canvas + MJPEG 解析，可测延迟并自动重新同步）==================== */
 
-function openPreview(streamId) {
-  state.previewId = streamId;
-  $('#preview-card').hidden = false;
-  $('#preview-id').textContent = streamId;
-  loadPreviewFrame();
-  refreshStats();
-  clearInterval(state.statsTimer);
-  state.statsTimer = setInterval(refreshStats, 1000);
-  $('#preview-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+// 端到端延迟超过该值且持续 2s → 重新连接，丢弃隧道/浏览器侧积压
+const PREVIEW_LAG_RESYNC_MS = 1500;
+const PREVIEW_RESYNC_MIN_GAP_MS = 3000;
+
+const viewer = {
+  ctrl: null,          // AbortController
+  running: false,
+  lagBase: Infinity,   // 校准基准：min(本地时间 - 帧时间戳)，抵消两端时钟偏差
+  lagMs: 0,
+  frames: 0,           // 客户端已渲染帧数
+  fpsT0: 0,
+  fpsCount: 0,
+  fps: 0,
+  laggingSince: 0,
+  lastResync: 0,
+  quality: '960|75|10',  // max_width|quality|fps
+};
+
+function concatBytes(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
 }
 
-function loadPreviewFrame() {
+function indexOfSeq(buf, seq, from = 0) {
+  outer:
+  for (let i = from; i <= buf.length - seq.length; i++) {
+    for (let j = 0; j < seq.length; j++) {
+      if (buf[i + j] !== seq[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+// 从缓冲区里取出一个完整的 MJPEG 分片；数据不够则返回 null
+function nextJpegPart(buf) {
+  const he = indexOfSeq(buf, [13, 10, 13, 10]);
+  if (he < 0) return null;
+  const header = new TextDecoder('latin1').decode(buf.subarray(0, he));
+  const lenMatch = /content-length:\s*(\d+)/i.exec(header);
+  if (!lenMatch) {
+    // 不是带长度头的分片（例如结束边界），丢弃这段头继续
+    return { jpeg: null, ts: 0, rest: buf.subarray(he + 4) };
+  }
+  const len = parseInt(lenMatch[1], 10);
+  const start = he + 4;
+  if (buf.length < start + len) return null;  // 等更多数据
+  const tsMatch = /x-frame-ts:\s*(\d+)/i.exec(header);
+  return {
+    jpeg: buf.slice(start, start + len),
+    ts: tsMatch ? parseInt(tsMatch[1], 10) : 0,
+    rest: buf.subarray(start + len),
+  };
+}
+
+async function drawJpeg(ctx, canvas, jpeg) {
+  const bmp = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }));
+  if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+  }
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close();
+}
+
+function previewUrl(streamId) {
+  const [w, q, fps] = viewer.quality.split('|');
+  return `/api/streams/${encodeURIComponent(streamId)}/mjpeg`
+    + `?max_width=${w}&quality=${q}&fps=${fps}&_=${Date.now()}`;
+}
+
+function stopPreviewStream() {
+  viewer.running = false;
+  if (viewer.ctrl) {
+    try { viewer.ctrl.abort(); } catch (_) { /* 忽略 */ }
+    viewer.ctrl = null;
+  }
+  clearTimeout(state.previewRetry);
+}
+
+function schedulePreviewRetry(streamId) {
+  clearTimeout(state.previewRetry);
+  state.previewRetry = setTimeout(() => {
+    if (state.previewId === streamId) startPreviewStream();
+  }, 3000);
+}
+
+async function startPreviewStream() {
   const id = state.previewId;
   if (!id) return;
-  const img = $('#preview-img');
+  stopPreviewStream();
+
+  const ctrl = new AbortController();
+  viewer.ctrl = ctrl;
+  viewer.running = true;
+  viewer.lagBase = Infinity;
+  viewer.lagMs = 0;
+  viewer.laggingSince = 0;
+  viewer.fpsT0 = performance.now();
+  viewer.fpsCount = 0;
+  viewer.fps = 0;
+
+  const canvas = $('#preview-canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
   const hint = $('#preview-hint');
   hint.hidden = true;
-  img.hidden = false;
-  img.onload = () => { hint.hidden = true; img.hidden = false; };
-  img.onerror = () => {
-    // 服务端长时间无新帧时后端会结束该 MJPEG 流，这里提示并自动重试
-    img.hidden = true;
-    hint.hidden = false;
-    hint.textContent = '等待帧…（流未连接，或该流暂无新帧；3 秒后自动重试）';
-    clearTimeout(state.previewRetry);
-    state.previewRetry = setTimeout(() => { if (state.previewId === id) loadPreviewFrame(); }, 3000);
-  };
-  img.src = `/api/streams/${encodeURIComponent(id)}/mjpeg?fps=10&max_width=1280&quality=80&t=${Date.now()}`;
+  canvas.hidden = false;
+
+  let buf = new Uint8Array(0);
+  try {
+    const resp = await fetch(previewUrl(id), { signal: ctrl.signal, cache: 'no-store' });
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+    const reader = resp.body.getReader();
+
+    while (viewer.running && viewer.ctrl === ctrl) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf = concatBytes(buf, value);
+
+      // 尽量把本次收到的分片都取出来，只渲染最后一帧（积压时自动丢中间帧）
+      let newest = null;
+      let newestTs = 0;
+      let got = 0;
+      for (;;) {
+        const part = nextJpegPart(buf);
+        if (!part) break;
+        buf = part.rest;
+        if (part.jpeg) { newest = part.jpeg; newestTs = part.ts; got += 1; }
+      }
+      if (!newest) continue;
+
+      await drawJpeg(ctx, canvas, newest);
+      viewer.frames += 1;
+      viewer.fpsCount += got;
+
+      const now = performance.now();
+      if (now - viewer.fpsT0 >= 1000) {
+        viewer.fps = viewer.fpsCount * 1000 / (now - viewer.fpsT0);
+        viewer.fpsCount = 0;
+        viewer.fpsT0 = now;
+      }
+
+      if (newestTs) {
+        // 用会话内最小值做基准：同时抵消两端时钟偏差与初始缓冲
+        const raw = Date.now() - newestTs;
+        if (raw < viewer.lagBase) viewer.lagBase = raw;
+        viewer.lagMs = Math.max(0, raw - viewer.lagBase);
+        maybeResync(id, viewer.lagMs);
+      }
+      renderPreviewStats();
+    }
+
+    if (viewer.running && viewer.ctrl === ctrl) {
+      hint.hidden = false;
+      hint.textContent = '暂无新帧（流未连接或服务端长时间无帧），3 秒后重试…';
+      schedulePreviewRetry(id);
+    }
+  } catch (e) {
+    if (viewer.running && viewer.ctrl === ctrl && e.name !== 'AbortError') {
+      hint.hidden = false;
+      hint.textContent = `预览中断：${e.message}（3 秒后重试）`;
+      schedulePreviewRetry(id);
+    }
+  }
 }
 
-async function refreshStats() {
+function maybeResync(streamId, lagMs) {
+  const now = Date.now();
+  if (lagMs <= PREVIEW_LAG_RESYNC_MS) {
+    viewer.laggingSince = 0;
+    return;
+  }
+  if (!viewer.laggingSince) {
+    viewer.laggingSince = now;
+    return;
+  }
+  if (now - viewer.laggingSince < 2000 || now - viewer.lastResync < PREVIEW_RESYNC_MIN_GAP_MS) {
+    return;
+  }
+  viewer.lastResync = now;
+  viewer.laggingSince = 0;
+
+  // 30 秒内反复积压 → 判定带宽不足，自动降一档画质
+  viewer.resyncs = (viewer.resyncs || []).filter((t) => now - t < 30000);
+  viewer.resyncs.push(now);
+  if (viewer.resyncs.length >= 3) {
+    viewer.resyncs = [];
+    if (downgradeQuality()) {
+      toast('网络带宽不足，已自动降低预览画质', 'warn');
+    } else {
+      toast('网络带宽不足：已是流畅画质，建议改用 gRPC 模式或降低分辨率', 'warn');
+    }
+  } else {
+    toast(`检测到预览积压 ${(lagMs / 1000).toFixed(1)}s，已重新同步（丢弃缓冲）`, 'warn');
+  }
+  startPreviewStream();
+}
+
+function downgradeQuality() {
+  const order = ['480|60|8', '960|75|10', '1600|85|10'];
+  const i = order.indexOf(viewer.quality);
+  if (i <= 0) return false;
+  viewer.quality = order[i - 1];
+  const sel = $('#preview-quality');
+  if (sel) sel.value = viewer.quality;
+  return true;
+}
+
+function renderPreviewStats() {
+  const el = $('#preview-stats');
+  const server = state.serverStats || {};
+  const lagTxt = viewer.lagBase === Infinity
+    ? '—'
+    : (viewer.lagMs >= 1000 ? `${(viewer.lagMs / 1000).toFixed(1)}s` : `${Math.round(viewer.lagMs)}ms`);
+  const stale = viewer.lagMs > PREVIEW_LAG_RESYNC_MS;
+  const serverTxt = server.fps ? `服务端 ${server.fps.toFixed(1)} FPS` : '服务端 —';
+
+  el.textContent = `客户端 ${viewer.fps.toFixed(1)} FPS · ${serverTxt} · 端到端延迟 ${lagTxt}`
+    + (stale ? ' ⚠' : '');
+  el.className = stale ? 'muted warn-text' : 'muted';
+  el.title = stale
+    ? '延迟持续偏大：接收速度跟不上发送速度（常见于 VS Code 端口转发/远程网络），已自动重新同步'
+    : '端到端延迟 = 浏览器收到并渲染该帧时，它已经“在途”多久（含网络/隧道积压）';
+}
+
+async function refreshServerStats() {
   const id = state.previewId;
   if (!id) return;
   try {
-    const st = await api(`/api/streams/${encodeURIComponent(id)}/stats`);
-    const ageMs = st.last_ts ? Math.max(0, Date.now() - st.last_ts) : null;
-    const ageTxt = ageMs === null
-      ? '—'
-      : (ageMs >= 1000 ? `${(ageMs / 1000).toFixed(1)}s` : `${ageMs}ms`);
-    const stale = ageMs !== null && ageMs > 2000;
-
-    const el = $('#preview-stats');
-    el.textContent = `预览 ${st.fps.toFixed(1)} FPS · 已发送 ${st.sent} 帧 · 帧龄 ${ageTxt}`
-      + (stale ? ' ⚠' : '');
-    el.className = stale ? 'muted warn-text' : 'muted';
-    el.title = stale
-      ? '帧龄偏大：服务端解码管线落后于采集（常见于刚起流、CPU 解码跟不上或源帧率过高）'
-      : '显示画面相对当前时间的新鲜度';
+    state.serverStats = await api(`/api/streams/${encodeURIComponent(id)}/stats`);
   } catch (_) {
-    $('#preview-stats').textContent = '';
+    state.serverStats = null;
   }
+  renderPreviewStats();
+}
+
+function openPreview(streamId) {
+  state.previewId = streamId;
+  state.serverStats = null;
+  $('#preview-card').hidden = false;
+  $('#preview-id').textContent = streamId;
+  startPreviewStream();
+  clearInterval(state.statsTimer);
+  state.statsTimer = setInterval(refreshServerStats, 1000);
+  refreshServerStats();
+  $('#preview-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function closePreview() {
   state.previewId = null;
-  clearTimeout(state.previewRetry);
+  state.serverStats = null;
+  stopPreviewStream();
   clearInterval(state.statsTimer);
   $('#preview-card').hidden = true;
-  $('#preview-img').removeAttribute('src');
+  $('#preview-canvas').hidden = true;
+  $('#preview-hint').hidden = true;
   $('#preview-stats').textContent = '';
 }
+
 
 /* ==================== 初始化 ==================== */
 
@@ -518,6 +718,20 @@ function init() {
   $('#btn-stop-all').addEventListener('click', stopAll);
   $('#btn-snapshot').addEventListener('click', () => state.previewId && snapshot(state.previewId));
   $('#btn-close-preview').addEventListener('click', closePreview);
+  $('#btn-preview-resync').addEventListener('click', () => {
+    if (!state.previewId) return;
+    viewer.lastResync = Date.now();
+    viewer.laggingSince = 0;
+    toast('已重新同步预览（丢弃积压缓冲）', 'ok', 1500);
+    startPreviewStream();
+  });
+  $('#preview-quality').addEventListener('change', (e) => {
+    viewer.quality = e.target.value;
+    if (state.previewId) {
+      toast('已切换预览画质', 'ok', 1200);
+      startPreviewStream();
+    }
+  });
 
   loadMeta();
   loadHealth();
