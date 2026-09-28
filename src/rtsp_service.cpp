@@ -379,6 +379,8 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
         info->set_keep_on_failure(task->shouldKeepOnFailure());
         info->set_fps(task->getPublishFps());
         info->set_media_lag_ms(static_cast<int32_t>(task->getMediaLagMs()));
+        info->set_corrupted_frames(task->getCorruptedFrames());
+        info->set_glitch_ratio(task->getGlitchRatio());
 
         switch (task->getStatus())
         {
@@ -428,6 +430,8 @@ grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const st
         stream_info->set_keep_on_failure(task->shouldKeepOnFailure());
         stream_info->set_fps(task->getPublishFps());
         stream_info->set_media_lag_ms(static_cast<int32_t>(task->getMediaLagMs()));
+        stream_info->set_corrupted_frames(task->getCorruptedFrames());
+        stream_info->set_glitch_ratio(task->getGlitchRatio());
 
     }
     return grpc::Status::OK;

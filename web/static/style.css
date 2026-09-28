@@ -353,6 +353,17 @@ td .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wra
   white-space: nowrap;
 }
 
+/* 花屏等异常：需要一眼看见 */
+.tag.warn {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: var(--warn);
+}
+
+.tag.muted {
+  opacity: 0.72;
+}
+
 .empty {
   display: flex;
   flex-direction: column;

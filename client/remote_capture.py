@@ -948,7 +948,9 @@ class _BaseRTSPClient:
                 "only_key_frames": s.only_key_frames,
                 "use_shared_mem": s.use_shared_mem,
                 "fps": getattr(s, "fps", 0.0),
-                "media_lag_ms": getattr(s, "media_lag_ms", 0)
+                "media_lag_ms": getattr(s, "media_lag_ms", 0),
+                "corrupted_frames": getattr(s, "corrupted_frames", 0),
+                "glitch_ratio": getattr(s, "glitch_ratio", 0.0)
             })
         return streams
 
@@ -983,6 +985,8 @@ class _BaseRTSPClient:
             "use_shared_mem": s.use_shared_mem,
             "fps": getattr(s, "fps", 0.0),
             "media_lag_ms": getattr(s, "media_lag_ms", 0),
+            "corrupted_frames": getattr(s, "corrupted_frames", 0),
+            "glitch_ratio": getattr(s, "glitch_ratio", 0.0),
             "server_message": resp.message
         }
 

@@ -43,6 +43,17 @@ public:
     bool onlyKeyFrames() const override { return only_key_frames_; }
     int64_t lastFramePtsMs() const override { return last_pts_; }
 
+    // 花屏信号（解码器自报）：转发 FFmpeg 解码器统计
+    IVideoDecoder::DecodeHealth getDecodeHealth() const override
+    {
+        return decoder_ ? decoder_->getDecodeHealth() : IVideoDecoder::DecodeHealth{};
+    }
+    void resetDecodeHealth() override
+    {
+        if (decoder_)
+            decoder_->resetDecodeHealth();
+    }
+
 private:
     bool reconnect(); // 重连辅助函数
 

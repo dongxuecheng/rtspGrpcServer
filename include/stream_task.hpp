@@ -77,6 +77,15 @@ public:
     // （观感就是“越播越滞后”）。负值/接近 0 表示跟得上源。
     int64_t getMediaLagMs() const { return media_drift_ms_.load(std::memory_order_relaxed); }
 
+    // 花屏（解码质量）统计：
+    //   corrupted_frames 累计错误帧数（解码器自报），glitch_ratio 是最近 1 秒窗口
+    //   内出现花屏的帧占比。花屏无法通过像素域可靠判断，这里只用解码器的硬信号：
+    //     CPU  : AVFrame::decode_error_flags（缺参考帧 / 错误掩盖 / 码流非法）
+    //     GPU  : cuvidGetDecodeStatus（Error / Error_Concealed）
+    uint64_t getCorruptedFrames() const { return glitch_total_.load(std::memory_order_relaxed); }
+    double getGlitchRatio() const { return glitch_ratio_.load(std::memory_order_relaxed); }
+    void updateGlitchStats();
+
     // 条件变量等待下一帧（零拷贝）
     bool waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms);
 
@@ -232,6 +241,19 @@ private:
     int64_t media_pts_base_ms_ = 0;
     int64_t media_wall_base_ms_ = 0;
     std::atomic<int64_t> media_drift_ms_{0};
+
+    // ---- 花屏统计（IO 线程写入，gRPC 线程读原子量）----
+    std::atomic<uint64_t> glitch_total_{0};  // 累计错误帧数（含自测伪造）
+    std::atomic<double> glitch_ratio_{0.0};  // 最近 1 秒窗口内花屏帧占比 0~1
+    uint64_t glitch_last_seen_total_ = 0;    // 上次采样时解码器报的计数
+    uint64_t glitch_win_errors_ = 0;         // 本窗口新增错误帧数
+    uint64_t glitch_win_frames_ = 0;         // 本窗口采样帧数
+    int64_t glitch_win_start_ms_ = 0;        // 窗口起点（墙钟 ms）
+    bool glitch_logged_ = false;             // 本次花屏是否已告警（避免刷屏）
+    int64_t glitch_high_since_ms_ = 0;       // 持续花屏起始时间（用于可选重连）
+    int glitch_reconnect_s_ = 0;             // >0：持续花屏该秒数后重连（RTSP_GLITCH_RECONNECT_S）
+    uint64_t fake_glitch_counter_ = 0;       // 自测：伪造花屏计数（RTSP_FAKE_GLITCH=1）
+    uint64_t fake_glitch_errors_ = 0;
 
     // 出帧率统计（1 秒滚动窗口，无锁；发布点调用 recordPublishedFrame）
     void recordPublishedFrame();

@@ -159,6 +159,10 @@ namespace FFHDDecoder
             if (!m_ctx || !m_frame)
                 return false;
 
+            // 花屏判定：先清零错误标志，避免复用的 AVFrame 残留上一帧的标志
+            // （libavcodec 只在“出帧了但解码出错”时置位，靠它判定比像素域猜测准得多）
+            m_frame->decode_error_flags = 0;
+
             // 尝试从解码器接收解码后的原始帧
             int ret = avcodec_receive_frame(m_ctx, m_frame);
 
@@ -174,8 +178,29 @@ namespace FFHDDecoder
                 return false;
             }
 
+            recordDecodeErrorFlags(m_frame->decode_error_flags);
+
             *pOutFrame = m_frame;
             return true;
+        }
+
+        // 花屏信号记录
+        IVideoDecoder::DecodeHealth getDecodeHealth() const override
+        {
+            IVideoDecoder::DecodeHealth h;
+            h.corrupted_frames = m_health_corrupted.load(std::memory_order_relaxed);
+            h.missing_reference = m_health_missing_ref.load(std::memory_order_relaxed);
+            h.invalid_bitstream = m_health_invalid_bs.load(std::memory_order_relaxed);
+            h.last_error_wall_ms = m_health_last_ms.load(std::memory_order_relaxed);
+            return h;
+        }
+
+        void resetDecodeHealth() override
+        {
+            m_health_corrupted.store(0, std::memory_order_relaxed);
+            m_health_missing_ref.store(0, std::memory_order_relaxed);
+            m_health_invalid_bs.store(0, std::memory_order_relaxed);
+            m_health_last_ms.store(0, std::memory_order_relaxed);
         }
 
         int get_width() override { return m_ctx ? m_ctx->width : 0; }
@@ -248,10 +273,42 @@ namespace FFHDDecoder
         }
 
     private:
+        // 把 AVFrame::decode_error_flags 归入花屏计数。
+        // 这些标志的含义（libavutil/frame.h）：
+        //   MISSING_REFERENCE   缺少参考帧 —— 必然花屏（画面出现灰块/拖影）
+        //   CONCEALMENT_ACTIVE  解码器已做错误掩盖 —— 画面上就是花屏本身
+        //   INVALID_BITSTREAM   码流非法/损坏
+        //   DECODE_SLICES       多 slice 独立解码（不是错误，忽略）
+        void recordDecodeErrorFlags(int flags)
+        {
+            constexpr int ERR_MASK = FF_DECODE_ERROR_MISSING_REFERENCE |
+                                     FF_DECODE_ERROR_CONCEALMENT_ACTIVE |
+                                     FF_DECODE_ERROR_INVALID_BITSTREAM;
+            if ((flags & ERR_MASK) == 0)
+                return;
+
+            m_health_corrupted.fetch_add(1, std::memory_order_relaxed);
+            if (flags & FF_DECODE_ERROR_MISSING_REFERENCE)
+                m_health_missing_ref.fetch_add(1, std::memory_order_relaxed);
+            if (flags & FF_DECODE_ERROR_INVALID_BITSTREAM)
+                m_health_invalid_bs.fetch_add(1, std::memory_order_relaxed);
+            m_health_last_ms.store(static_cast<int64_t>(
+                                       std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count()),
+                                   std::memory_order_relaxed);
+        }
+
         AVCodecContext *m_ctx = nullptr;
         AVPacket *m_packet = nullptr;
         AVFrame *m_frame = nullptr;
         SwsContext *m_sws_ctx = nullptr;
+
+        // 花屏统计（原子：IO 线程写，gRPC 线程读）
+        std::atomic<uint64_t> m_health_corrupted{0};
+        std::atomic<uint64_t> m_health_missing_ref{0};
+        std::atomic<uint64_t> m_health_invalid_bs{0};
+        std::atomic<int64_t> m_health_last_ms{0};
     };
 
     std::shared_ptr<FFmpegDecoder> create_ffmpeg_decoder(AVCodecID codec_id, uint8_t *extradata, int extradata_size)

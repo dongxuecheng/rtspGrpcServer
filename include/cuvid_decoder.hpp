@@ -3,6 +3,8 @@
 #define CUVID_DECODER_HPP
 
 #include <memory>
+#include <cstdint>
+#include "interfaces.hpp" // IVideoDecoder::DecodeHealth
 // 就不用在这里包含cuda_runtime.h
 
 struct CUstream_st;
@@ -38,6 +40,11 @@ namespace FFHDDecoder
         virtual ICUStream get_stream() = 0;
         virtual int device() = 0;
         virtual bool is_gpu_frame() = 0;
+
+        // 花屏信号：NVDEC 自报的错误帧计数
+        // （cuvidGetDecodeStatus 返回 Error / Error_Concealed 的帧）
+        virtual IVideoDecoder::DecodeHealth getDecodeHealth() const = 0;
+        virtual void resetDecodeHealth() = 0;
     };
 
     IcudaVideoCodec ffmpeg2NvCodecId(int ffmpeg_codec_id);

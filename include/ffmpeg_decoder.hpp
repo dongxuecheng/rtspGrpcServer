@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <string>
+#include <atomic>
+#include "interfaces.hpp" // IVideoDecoder::DecodeHealth
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -31,6 +33,10 @@ namespace FFHDDecoder {
 
         // 辅助功能：将解码后的 AVFrame 转换为 BGR24 数据（常用于 OpenCV Mat）
         virtual bool convert_to_bgr(AVFrame* frame, uint8_t* bgr_buffer, int bgr_linesize) = 0;
+
+        // 花屏信号：解码器自报的错误帧计数（见 IVideoDecoder::DecodeHealth）
+        virtual IVideoDecoder::DecodeHealth getDecodeHealth() const = 0;
+        virtual void resetDecodeHealth() = 0;
     };
 
     // 工厂函数：创建解码器

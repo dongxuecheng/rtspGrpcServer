@@ -102,6 +102,11 @@ StreamTask::StreamTask(const std::string &url,
     // 初始化内存池
     frame_pool_ = FrameMemoryPool::create(3 * 1024 * 1024);
     updateHeartbeat();
+    // 花屏持续多久后自动重连（秒，0 = 关闭）。默认关闭：重连会中断 SHM 客户端。
+    if (const char *env_glitch = std::getenv("RTSP_GLITCH_RECONNECT_S"))
+    {
+        glitch_reconnect_s_ = std::max(0, std::atoi(env_glitch));
+    }
     last_encode_time_ = std::chrono::steady_clock::now();
     // 首帧必须立即放行：初始截止时间放到过去
     next_process_deadline_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
@@ -474,6 +479,8 @@ void StreamTask::stepIO()
             last_encode_time_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
             // 重连后源时间轴已变，抽帧截止时间重新对齐
             next_process_deadline_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            // 新解码器从 0 开始计数，花屏基线同步归零
+            glitch_last_seen_total_ = 0;
             // 记录首次尝试抓取的时间，用于首帧宽限期判断
             first_grab_attempt_time_ = std::chrono::steady_clock::now();
             first_frame_seen_.store(false, std::memory_order_release);
@@ -562,6 +569,9 @@ void StreamTask::stepIO()
                                   std::memory_order_relaxed);
         }
     }
+
+    // 花屏检测：读取解码器自报的错误帧计数，维护 1 秒窗口占比
+    updateGlitchStats();
 
     // 3. 抽帧逻辑判断 (Frame dropping)
     //
@@ -966,6 +976,106 @@ double StreamTask::getPublishFps() const
         return 0.0;
 
     return publish_fps_.load(std::memory_order_relaxed);
+}
+
+// ==================== 花屏（解码质量）判定 ====================
+//
+// 只使用解码器自报的硬信号，不做像素域猜测：
+//   - CPU (FFmpeg): AVFrame::decode_error_flags 里的
+//       MISSING_REFERENCE / CONCEALMENT_ACTIVE / INVALID_BITSTREAM
+//   - GPU (NVDEC) : cuvidGetDecodeStatus 的 Error / Error_Concealed
+// 这些都是“解码器明确知道这一帧坏了”，零误报；像素域那套（灰块率、块效应）
+// 在夜间红外切黑白、低照度、纯色场景下会大量误报，只在解码器不报错但画面确有
+// 伪影时才有必要作为兜底。
+void StreamTask::updateGlitchStats()
+{
+    if (!decoder_)
+        return;
+
+    const auto health = decoder_->getDecodeHealth();
+
+    // 解码器累计计数 → 本窗口新增
+    uint64_t new_errors = 0;
+    if (health.corrupted_frames >= glitch_last_seen_total_)
+    {
+        new_errors = health.corrupted_frames - glitch_last_seen_total_;
+    }
+    glitch_last_seen_total_ = health.corrupted_frames;
+
+    // 自测开关：没有真实坏流时用来验证 日志/proto/Web 展示 链路
+    // （RTSP_FAKE_GLITCH=1，每 100 帧伪造一次花屏）
+    static const bool fake_glitch = (std::getenv("RTSP_FAKE_GLITCH") != nullptr);
+    if (fake_glitch && (++fake_glitch_counter_ % 100 == 0))
+    {
+        ++fake_glitch_errors_;
+        ++new_errors;
+    }
+
+    glitch_total_.store(health.corrupted_frames + fake_glitch_errors_, std::memory_order_relaxed);
+    glitch_win_errors_ += new_errors;
+    ++glitch_win_frames_;
+
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+    if (glitch_win_start_ms_ == 0)
+    {
+        glitch_win_start_ms_ = now_ms;
+    }
+
+    // 一次“花屏事件”只告警一条，恢复时再补一条，避免刷屏
+    if (new_errors > 0 && !glitch_logged_)
+    {
+        glitch_logged_ = true;
+        spdlog::warn("[glitch] {} 检测到花屏：累计 {} 帧（缺参考帧 {} / 码流非法 {} / 错误掩盖 {}）；"
+                     "RTSP 走 TCP 时通常意味着相机侧码流异常或解码器丢参考帧",
+                     stream_id_, health.corrupted_frames + fake_glitch_errors_,
+                     health.missing_reference, health.invalid_bitstream, health.error_concealed);
+    }
+
+    // 每秒结算一次窗口占比
+    const int64_t elapsed_ms = now_ms - glitch_win_start_ms_;
+    if (elapsed_ms < 1000)
+    {
+        return;
+    }
+
+    const double ratio = glitch_win_frames_ ? static_cast<double>(glitch_win_errors_) / static_cast<double>(glitch_win_frames_) : 0.0;
+    glitch_ratio_.store(ratio, std::memory_order_relaxed);
+
+    if (glitch_logged_ && glitch_win_errors_ == 0)
+    {
+        glitch_logged_ = false;
+        spdlog::info("[glitch] {} 花屏已恢复（累计 {} 帧）", stream_id_,
+                     health.corrupted_frames + fake_glitch_errors_);
+    }
+
+    // 可选恢复手段：持续花屏时重连（现有 FFmpeg 封装没有暴露 RTCP FIR/PLI 请求 IDR 的能力，
+    // 重连后服务端会重新出 IDR，是唯一可靠的自愈路径）。默认关闭（RTSP_GLITCH_RECONNECT_S=0），
+    // 因为重连本身会中断 SHM 客户端。
+    if (glitch_reconnect_s_ > 0 && ratio > 0.3)
+    {
+        if (glitch_high_since_ms_ == 0)
+        {
+            glitch_high_since_ms_ = now_ms;
+        }
+        else if (now_ms - glitch_high_since_ms_ > glitch_reconnect_s_ * 1000LL)
+        {
+            glitch_high_since_ms_ = 0;
+            glitch_logged_ = false;
+            spdlog::warn("[glitch] {} 持续花屏（占比 {:.0f}%）超过 {}s，重连以强制获取新 IDR",
+                         stream_id_, ratio * 100.0, glitch_reconnect_s_);
+            force_reopen_ = true;
+        }
+    }
+    else
+    {
+        glitch_high_since_ms_ = 0;
+    }
+
+    glitch_win_start_ms_ = now_ms;
+    glitch_win_frames_ = 0;
+    glitch_win_errors_ = 0;
 }
 
 int StreamTask::calculateReconnectDelayMs() const

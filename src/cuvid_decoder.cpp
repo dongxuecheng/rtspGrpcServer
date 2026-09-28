@@ -2,6 +2,8 @@
 #include "cuvid_decoder.hpp"
 #include "cuda_tools.hpp"
 #include <nvcuvid.h>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <vector>
 #include <sstream>
@@ -179,6 +181,23 @@ namespace FFHDDecoder
             if (m_bDecodeError)
                 return -1;
             return m_nDecodedFrame;
+        }
+
+        // 花屏信号（NVDEC 自报）：累计错误帧数
+        IVideoDecoder::DecodeHealth getDecodeHealth() const override
+        {
+            IVideoDecoder::DecodeHealth h;
+            h.corrupted_frames = m_nHealthCorrupted.load(std::memory_order_relaxed);
+            h.error_concealed = m_nHealthConcealed.load(std::memory_order_relaxed);
+            h.last_error_wall_ms = m_nHealthLastMs.load(std::memory_order_relaxed);
+            return h;
+        }
+
+        void resetDecodeHealth() override
+        {
+            m_nHealthCorrupted.store(0, std::memory_order_relaxed);
+            m_nHealthConcealed.store(0, std::memory_order_relaxed);
+            m_nHealthLastMs.store(0, std::memory_order_relaxed);
         }
 
         static int CUDAAPI handleVideoSequenceProc(void *pUserData, CUVIDEOFORMAT *pVideoFormat) { return ((CUVIDDecoderImpl *)pUserData)->handleVideoSequence(pVideoFormat); }
@@ -421,8 +440,24 @@ namespace FFHDDecoder
             CUresult result = cuvidGetDecodeStatus(m_hDecoder, pDispInfo->picture_index, &DecodeStatus);
             if (result == CUDA_SUCCESS && (DecodeStatus.decodeStatus == cuvidDecodeStatus_Error || DecodeStatus.decodeStatus == cuvidDecodeStatus_Error_Concealed))
             {
+                // NVDEC 明确报告“这一帧解码出错/做了错误掩盖”——这就是花屏的官方判定
+                // （Error_Concealed = 缺参考数据，NVDEC 用上一帧/灰色填充补出来的帧）。
+                // 只丢掉这一帧、但不中止解析（返回 1），同时累计计数交由上层判定与上报。
+                // 注意：这里不能返回 0，pfnDisplayPicture 返回 0 表示失败并可能中止解析，
+                // 会连累整路解码（历史实现就是静默 return 0，既丢帧又丢失了花屏信息）。
+                m_nHealthCorrupted.fetch_add(1, std::memory_order_relaxed);
+                if (DecodeStatus.decodeStatus == cuvidDecodeStatus_Error_Concealed)
+                {
+                    m_nHealthConcealed.fetch_add(1, std::memory_order_relaxed);
+                }
+                m_nHealthLastMs.store(static_cast<int64_t>(
+                                          std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              std::chrono::system_clock::now().time_since_epoch())
+                                              .count()),
+                                      std::memory_order_relaxed);
+
                 checkCudaDriver(cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame));
-                return 0;
+                return 1;
             }
 
             uint8_t *pDecodedFrame = nullptr;
@@ -705,6 +740,11 @@ namespace FFHDDecoder
         // NVDEC 侧硬错误标志：会话创建/显存分配/解析失败时置位，
         // decode() 据此返回 -1，驱动上层 release + 重连，而非无限喂包
         bool m_bDecodeError = false;
+
+        // 花屏统计：cuvidGetDecodeStatus 报告 Error / Error_Concealed 的帧数
+        std::atomic<uint64_t> m_nHealthCorrupted{0};
+        std::atomic<uint64_t> m_nHealthConcealed{0};
+        std::atomic<int64_t> m_nHealthLastMs{0};
     };
 
     std::shared_ptr<CUVIDDecoder> create_cuvid_decoder(

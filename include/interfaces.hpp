@@ -23,6 +23,32 @@ public:
     // （表现为：看的画面越来越滞后于实时）。不支持时返回 0。
     virtual int64_t lastFramePtsMs() const { return 0; }
 
+    // ==================== 花屏（解码质量）判定 ====================
+    //
+    // 思路：优先用“解码器自报的错误”，而不是去猜像素。
+    // 解码器知道哪一帧缺了参考帧、哪一帧做了错误掩盖（concealment），
+    // 这类帧在画面上就是灰块/绿块/马赛克（即“花屏”）。
+    // 这个信号零误报、几乎零开销，而且比任何像素域启发式都准。
+    //
+    // 各实现提供的信号：
+    //   - CpuDecoder  (FFmpeg)  : AVFrame::decode_error_flags
+    //                             （MISSING_REFERENCE / CONCEALMENT_ACTIVE / INVALID_BITSTREAM）
+    //   - CudaDecoder (NVDEC)   : cuvidGetDecodeStatus -> cuvidDecodeStatus_Error /
+    //                             cuvidDecodeStatus_Error_Concealed
+    //   - HikDecoder  (SDK 抓图): 由 SDK 出图，不适用（恒为 0）
+    struct DecodeHealth
+    {
+        uint64_t corrupted_frames = 0;   // 累计：解码器判定“出帧了，但解码过程有错/做了错误掩盖”
+        uint64_t missing_reference = 0;  // 其中：缺参考帧（必然花屏）
+        uint64_t invalid_bitstream = 0;  // 其中：码流非法/损坏
+        uint64_t error_concealed = 0;    // 其中：解码器明确标记为“错误掩盖”（NVDEC）
+        int64_t last_error_wall_ms = 0;  // 最近一次错误的墙钟时间（ms），0 表示从未出现
+    };
+    virtual DecodeHealth getDecodeHealth() const { return {}; }
+
+    // 清空花屏计数（重连/换流后调用，避免新旧流的统计混在一起）
+    virtual void resetDecodeHealth() {}
+
     // GPU 帧支持（可选实现）
     virtual bool isGpuFrame() const { return false; }
     virtual uint8_t* getGpuFramePtr() { return nullptr; }

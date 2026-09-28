@@ -34,6 +34,17 @@ public:
 
     void setStream(cudaStream_t stream) { cuda_stream_ = stream; }
 
+    // 花屏信号（NVDEC 自报的错误掩盖帧计数）
+    IVideoDecoder::DecodeHealth getDecodeHealth() const override
+    {
+        return decoder_ ? decoder_->getDecodeHealth() : IVideoDecoder::DecodeHealth{};
+    }
+    void resetDecodeHealth() override
+    {
+        if (decoder_)
+            decoder_->resetDecodeHealth();
+    }
+
 private:
     std::shared_ptr<FFHDDemuxer::FFmpegDemuxer> demuxer_;
     std::shared_ptr<FFHDDecoder::CUVIDDecoder> decoder_;

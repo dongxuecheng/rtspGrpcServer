@@ -41,9 +41,9 @@ async function api(path, options = {}) {
   return data;
 }
 
-function tag(text, title) {
+function tag(text, title, cls) {
   const span = document.createElement('span');
-  span.className = 'tag';
+  span.className = cls ? `tag ${cls}` : 'tag';
   span.textContent = text;
   if (title) span.title = title;
   return span;
@@ -326,6 +326,19 @@ function renderStreams(streams) {
     if (s.keep_on_failure) tdOpt.appendChild(tag('失败保持'));
     if (s.decode_interval_ms > 0) tdOpt.appendChild(tag(`间隔 ${s.decode_interval_ms}ms`));
     tdOpt.appendChild(tag(`心跳 ${Math.round(s.heartbeat_timeout_ms / 1000)}s`));
+    // 花屏（解码器自报的错误帧）：
+    //   glitch_ratio > 0 = 最近 1 秒正在花屏；corrupted_frames 是累计值
+    const glitchRatio = Number(s.glitch_ratio || 0);
+    const corrupted = Number(s.corrupted_frames || 0);
+    if (glitchRatio > 0) {
+      tdOpt.appendChild(tag(`花屏 ${(glitchRatio * 100).toFixed(0)}%`,
+        `最近 1 秒约 ${(glitchRatio * 100).toFixed(1)}% 的帧解码出错（缺参考帧/错误掩盖），`
+        + '画面上就是灰块/绿块/马赛克。累计 ' + corrupted + ' 帧。'
+        + '走 TCP 时通常是相机侧码流异常，可考虑重连或改用关键帧模式。', 'warn'));
+    } else if (corrupted > 0) {
+      tdOpt.appendChild(tag(`花屏累计 ${corrupted}`,
+        `曾经出现 ${corrupted} 帧解码错误（当前已恢复正常）`, 'muted'));
+    }
     // 落后源超过 1 秒：说明接收缓冲在堆积（延迟会继续变大），醒目提示
     if (lagMs > 1000) {
       tdOpt.appendChild(tag(`落后 ${(lagMs / 1000).toFixed(1)}s`, '落后于源：接收缓冲堆积，延迟持续增大'));
