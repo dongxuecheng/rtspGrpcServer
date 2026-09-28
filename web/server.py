@@ -185,8 +185,10 @@ def _preview_stats(stream_id: str) -> dict:
         st = _PREVIEWS.get(stream_id)
         if not st:
             return {"viewers": 0, "sent": 0, "fps": 0.0, "last_ts": 0}
+        viewers = max(1, st["viewers"])
         return {"viewers": st["viewers"], "sent": st["sent"],
-                "fps": round(st["fps"], 2), "last_ts": st["last_ts"]}
+                # fps 是多个预览会话的合计，这里换算成“单个观众看到的发送帧率”
+                "fps": round(st["fps"] / viewers, 2), "last_ts": st["last_ts"]}
 
 
 # ==================== 请求/响应模型 ====================

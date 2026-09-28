@@ -49,10 +49,38 @@ function tag(text, title) {
   return span;
 }
 
-function button(text, cls, onClick) {
+// Material 风格的极简图标路径
+const ICONS = {
+  play: 'M8 5v14l11-7z',
+  stop: 'M6 6h12v12H6z',
+  camera: 'M9 3h6l1 2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3l1-2zm3 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10z',
+  edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+  copy: 'M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z',
+  refresh: 'M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z',
+  close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+  plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+};
+
+function icon(name, size = 14) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = ICONS[name] || '';
+  return svg;
+}
+
+function button(text, cls, onClick, iconName) {
   const b = document.createElement('button');
   b.className = cls;
-  b.textContent = text;
+  if (iconName) b.appendChild(icon(iconName));
+  if (text) {
+    const span = document.createElement('span');
+    span.textContent = text;
+    b.appendChild(span);
+  }
   b.onclick = onClick;
   return b;
 }
@@ -249,7 +277,7 @@ function renderStreams(streams) {
     idSpan.className = 'mono';
     idSpan.textContent = s.stream_id.length > 22 ? `${s.stream_id.slice(0, 22)}…` : s.stream_id;
     idSpan.title = s.stream_id;
-    tdId.append(idSpan, button('复制', 'mini', () => copyStreamId(s.stream_id)));
+    tdId.append(idSpan, button('', 'mini ghost', () => copyStreamId(s.stream_id), 'copy'));
 
     // --- URL ---
     const tdUrl = document.createElement('td');
@@ -259,10 +287,10 @@ function renderStreams(streams) {
 
     // --- 状态 ---
     const tdStatus = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = `badge ${STATUS_CLASS[s.status_name] || ''}`;
-    badge.textContent = s.status_name;
-    tdStatus.appendChild(badge);
+    const pill = document.createElement('span');
+    pill.className = `pill ${STATUS_CLASS[s.status_name] || ''}`;
+    pill.textContent = s.status_name;
+    tdStatus.appendChild(pill);
 
     // --- 解码器 ---
     const tdDecoder = document.createElement('td');
@@ -287,10 +315,10 @@ function renderStreams(streams) {
     const actions = document.createElement('div');
     actions.className = 'actions';
     actions.append(
-      button('预览', 'mini', () => openPreview(s.stream_id)),
-      button('截图', 'mini', () => snapshot(s.stream_id)),
-      button('改 URL', 'mini', () => changeUrl(s)),
-      button('停止', 'mini danger', () => stopStream(s.stream_id)),
+      button('预览', 'mini primary', () => openPreview(s.stream_id), 'play'),
+      button('截图', 'mini ghost', () => snapshot(s.stream_id), 'camera'),
+      button('改 URL', 'mini ghost', () => changeUrl(s), 'edit'),
+      button('停止', 'mini danger-ghost', () => stopStream(s.stream_id), 'stop'),
     );
     tdAct.appendChild(actions);
 
@@ -300,6 +328,15 @@ function renderStreams(streams) {
 
   $('#count').textContent = streams.length ? `共 ${streams.length} 路` : '';
   $('#empty').hidden = streams.length > 0;
+  renderStats(streams);
+}
+
+function renderStats(streams) {
+  const count = (name) => streams.filter((s) => s.status_name === name).length;
+  $('#stat-total').textContent = streams.length;
+  $('#stat-connected').textContent = count('已连接');
+  $('#stat-connecting').textContent = count('连接中');
+  $('#stat-error').textContent = count('无法连接') + count('不存在');
 }
 
 async function loadStreams() {
@@ -321,6 +358,7 @@ async function loadStreams() {
 async function createStream(event) {
   event.preventDefault();
   const btn = $('#btn-create');
+  const label = state.createLabel || btn;
   const body = {
     rtsp_url: $('#f-url').value.trim(),
     decoder_type: Number($('#f-decoder').value || 0),
@@ -332,7 +370,7 @@ async function createStream(event) {
     keep_on_failure: $('#f-keep').checked,
   };
   btn.disabled = true;
-  btn.textContent = '创建中…';
+  label.textContent = '创建中…';
   try {
     const res = await api('/api/streams', { method: 'POST', body: JSON.stringify(body) });
     toast(`已创建：${res.stream_id}`, 'ok');
@@ -342,7 +380,7 @@ async function createStream(event) {
     toast(`创建失败：${e.message}`, 'err');
   } finally {
     btn.disabled = false;
-    btn.textContent = '创建';
+    label.textContent = '创建任务';
   }
 }
 
@@ -575,6 +613,9 @@ async function startPreviewStream() {
       await drawJpeg(ctx, canvas, newest);
       viewer.frames += 1;
       viewer.fpsCount += got;
+      viewer.lastSize = `${canvas.width}×${canvas.height}`;
+      $('#preview-live').hidden = false;
+      $('#preview-hint').hidden = true;
 
       const now = performance.now();
       if (now - viewer.fpsT0 >= 1000) {
@@ -657,8 +698,9 @@ function renderPreviewStats() {
     : (viewer.lagMs >= 1000 ? `${(viewer.lagMs / 1000).toFixed(1)}s` : `${Math.round(viewer.lagMs)}ms`);
   const stale = viewer.lagMs > PREVIEW_LAG_RESYNC_MS;
   const serverTxt = server.fps ? `服务端 ${server.fps.toFixed(1)} FPS` : '服务端 —';
+  const sizeTxt = viewer.lastSize ? ` · ${viewer.lastSize}` : '';
 
-  el.textContent = `客户端 ${viewer.fps.toFixed(1)} FPS · ${serverTxt} · 端到端延迟 ${lagTxt}`
+  el.textContent = `客户端 ${viewer.fps.toFixed(1)} FPS · ${serverTxt} · 端到端延迟 ${lagTxt}${sizeTxt}`
     + (stale ? ' ⚠' : '');
   el.className = stale ? 'muted warn-text' : 'muted';
   el.title = stale
@@ -696,6 +738,7 @@ function closePreview() {
   clearInterval(state.statsTimer);
   $('#preview-card').hidden = true;
   $('#preview-canvas').hidden = true;
+  $('#preview-live').hidden = true;
   $('#preview-hint').hidden = true;
   $('#preview-stats').textContent = '';
 }
@@ -710,6 +753,12 @@ function bindAutoRefresh() {
   clearInterval(state.autoTimer);
   state.autoTimer = setInterval(tick, 2000);
   $('#auto-refresh').addEventListener('change', tick);
+}
+
+function tickClock() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  $('#clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function init() {
@@ -733,10 +782,31 @@ function init() {
     }
   });
 
+  // 创建按钮加图标（保留可更新的文字节点）
+  const createBtn = $('#btn-create');
+  createBtn.textContent = '';
+  const label = document.createElement('span');
+  label.textContent = '创建任务';
+  createBtn.append(icon('plus', 15), label);
+  state.createLabel = label;
+
+  // 其余带文字的按钮统一补图标
+  const withIcon = (sel, name) => {
+    const el = $(sel);
+    if (el) el.prepend(icon(name, 14));
+  };
+  withIcon('#btn-refresh', 'refresh');
+  withIcon('#btn-stop-all', 'stop');
+  withIcon('#btn-preview-resync', 'refresh');
+  withIcon('#btn-snapshot', 'camera');
+  withIcon('#btn-close-preview', 'close');
+
   loadMeta();
   loadHealth();
   loadStreams();
   bindAutoRefresh();
+  tickClock();
+  setInterval(tickClock, 1000);
 }
 
 document.addEventListener('DOMContentLoaded', init);

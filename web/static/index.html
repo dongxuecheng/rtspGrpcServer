@@ -4,110 +4,154 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RTSP 流控制台</title>
-  <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎥</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<header>
-  <h1>RTSP 流控制台</h1>
-  <div class="header-right">
-    <span class="muted" id="server-addr">—</span>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm14 4.5 4-2.5v8l-4-2.5v-3Z"/></svg>
+    </span>
+    <div class="brand-text">
+      <h1>RTSP 流控制台</h1>
+      <p class="sub mono" id="server-addr">—</p>
+    </div>
+  </div>
+  <div class="topbar-right">
     <span class="badge" id="health">连接中…</span>
-    <label class="switch" title="每 2 秒自动刷新流列表">
-      <input type="checkbox" id="auto-refresh" checked> 自动刷新
+    <span class="clock mono" id="clock">--:--:--</span>
+    <label class="switch" title="每 2 秒自动刷新流列表与状态">
+      <input type="checkbox" id="auto-refresh" checked>
+      <span>自动刷新</span>
     </label>
   </div>
 </header>
 
-<section class="card">
-  <h2>创建任务</h2>
-  <form id="create-form" class="grid-form">
-    <label class="span-3">RTSP URL
-      <input id="f-url" type="text" required spellcheck="false"
-             placeholder="rtsp://admin:密码@172.16.22.16:554/Streaming/Channels/101">
-    </label>
-
-    <label>解码器
-      <select id="f-decoder"></select>
-    </label>
-
-    <label>GPU ID
-      <input id="f-gpu" type="number" value="0" min="0" step="1">
-    </label>
-
-    <label>心跳超时 (ms)
-      <input id="f-hb" type="number" value="100000" min="1" max="3600000" step="1000">
-    </label>
-
-    <label>解码间隔 (ms)
-      <input id="f-interval" type="number" value="0" min="0" step="10">
-    </label>
-
-    <div class="checks span-3">
-      <label class="chk"><input type="checkbox" id="f-keyframe"> 仅关键帧</label>
-      <label class="chk" title="零拷贝读取原始帧，要求本页所在机器与服务端同机（同一 /dev/shm）">
-        <input type="checkbox" id="f-shm"> 使用共享内存 (SHM)
-      </label>
-      <label class="chk" title="连接失败时保留任务并持续重连">
-        <input type="checkbox" id="f-keep"> 失败保持
-      </label>
-      <button type="submit" id="btn-create">创建</button>
+<main>
+  <section class="stats" aria-label="概览">
+    <div class="stat">
+      <span class="stat-label">流总数</span>
+      <span class="stat-value" id="stat-total">0</span>
     </div>
-  </form>
-</section>
-
-<section class="card">
-  <div class="row-between">
-    <h2>流列表 <span class="muted" id="count"></span></h2>
-    <div class="btn-row">
-      <button id="btn-refresh">刷新</button>
-      <button id="btn-stop-all" class="danger">全部停止</button>
+    <div class="stat ok">
+      <span class="stat-label">已连接</span>
+      <span class="stat-value" id="stat-connected">0</span>
     </div>
-  </div>
+    <div class="stat warn">
+      <span class="stat-label">连接中</span>
+      <span class="stat-value" id="stat-connecting">0</span>
+    </div>
+    <div class="stat err">
+      <span class="stat-label">异常 / 不存在</span>
+      <span class="stat-value" id="stat-error">0</span>
+    </div>
+  </section>
 
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>RTSP URL</th>
-          <th>状态</th>
-          <th>解码器</th>
-          <th>分辨率</th>
-          <th>选项</th>
-          <th class="right">操作</th>
-        </tr>
-      </thead>
-      <tbody id="stream-rows"></tbody>
-    </table>
-  </div>
-  <p class="muted center" id="empty">暂无流，请在上方“创建任务”</p>
-</section>
-
-<section class="card" id="preview-card" hidden>
-  <div class="row-between">
-    <h2>预览 <span class="muted" id="preview-id"></span></h2>
-    <div class="btn-row">
-      <label class="inline-field" title="画质越高越清晰但占用带宽越大；网络差时选“流畅”更实时">
-        画质
-        <select id="preview-quality">
-          <option value="480|60|8">流畅</option>
-          <option value="960|75|10" selected>标准</option>
-          <option value="1600|85|10">高清</option>
-        </select>
+  <section class="card">
+    <div class="card-head">
+      <h2>创建任务</h2>
+      <p class="hint">支持 <code>rtsp://</code>（RTSP：CPU / GPU 解码）与 <code>hik://</code>（海康 SDK 抓图）</p>
+    </div>
+    <form id="create-form" class="grid-form">
+      <label class="span-all">RTSP URL
+        <input id="f-url" type="text" required spellcheck="false"
+               placeholder="rtsp://admin:密码@172.16.22.16:554/Streaming/Channels/101">
       </label>
-      <span class="muted" id="preview-stats"></span>
-      <button id="btn-preview-resync" title="丢弃已积压的缓冲，立即回到最新画面">重新同步</button>
-      <button id="btn-snapshot">截图</button>
-      <button id="btn-close-preview">关闭</button>
+
+      <label>解码器
+        <select id="f-decoder"></select>
+      </label>
+
+      <label>GPU ID
+        <input id="f-gpu" type="number" value="0" min="0" step="1">
+      </label>
+
+      <label>心跳超时 (ms)
+        <input id="f-hb" type="number" value="100000" min="1" max="3600000" step="1000">
+      </label>
+
+      <label>解码间隔 (ms)
+        <input id="f-interval" type="number" value="0" min="0" step="10">
+      </label>
+
+      <div class="form-foot span-all">
+        <div class="checks">
+          <label class="chk"><input type="checkbox" id="f-keyframe"><span>仅关键帧</span></label>
+          <label class="chk" title="零拷贝读取原始帧，要求本页所在机器与服务端同机（同一 /dev/shm）">
+            <input type="checkbox" id="f-shm"><span>共享内存 (SHM)</span>
+          </label>
+          <label class="chk" title="连接失败时保留任务并持续重连">
+            <input type="checkbox" id="f-keep"><span>失败保持</span>
+          </label>
+        </div>
+        <button type="submit" id="btn-create" class="primary">创建任务</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head row-between">
+      <h2>流列表 <span class="muted" id="count"></span></h2>
+      <div class="btn-row">
+        <button id="btn-refresh" class="ghost">刷新</button>
+        <button id="btn-stop-all" class="danger-ghost">全部停止</button>
+      </div>
     </div>
-  </div>
-  <div class="preview-wrap">
-    <canvas id="preview-canvas" hidden></canvas>
-    <p class="muted center" id="preview-hint" hidden></p>
-  </div>
-</section>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>RTSP URL</th>
+            <th>状态</th>
+            <th>解码器</th>
+            <th>分辨率</th>
+            <th>选项</th>
+            <th class="right">操作</th>
+          </tr>
+        </thead>
+        <tbody id="stream-rows"></tbody>
+      </table>
+    </div>
+
+    <div class="empty" id="empty">
+      <span class="empty-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.4">
+          <rect x="2.5" y="5.5" width="14" height="13" rx="2.5"/><path d="M16.5 11l5-3.2v8.4l-5-3.2"/>
+        </svg>
+      </span>
+      暂无流，请在上方“创建任务”
+    </div>
+  </section>
+
+  <section class="card" id="preview-card" hidden>
+    <div class="card-head row-between">
+      <h2>预览 <span class="muted mono" id="preview-id"></span></h2>
+      <div class="btn-row">
+        <label class="inline-field" title="画质越高越清晰但占用带宽越大；网络差时选“流畅”更实时">
+          画质
+          <select id="preview-quality">
+            <option value="480|60|8">流畅</option>
+            <option value="960|75|10" selected>标准</option>
+            <option value="1600|85|10">高清</option>
+          </select>
+        </label>
+        <span class="muted" id="preview-stats"></span>
+        <button id="btn-preview-resync" class="ghost" title="丢弃已积压的缓冲，立即回到最新画面">重新同步</button>
+        <button id="btn-snapshot" class="ghost">截图</button>
+        <button id="btn-close-preview" class="ghost">关闭</button>
+      </div>
+    </div>
+    <div class="preview-wrap">
+      <span class="live-tag" id="preview-live" hidden><i></i>LIVE</span>
+      <canvas id="preview-canvas" hidden></canvas>
+      <p class="muted center" id="preview-hint" hidden></p>
+    </div>
+  </section>
+</main>
 
 <div id="modal" class="modal-mask" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -118,7 +162,7 @@
       <p id="modal-error" class="field-error" hidden></p>
     </div>
     <div class="modal-actions">
-      <button id="modal-cancel">取消</button>
+      <button id="modal-cancel" class="ghost">取消</button>
       <button id="modal-ok" class="primary">确定</button>
     </div>
   </div>
