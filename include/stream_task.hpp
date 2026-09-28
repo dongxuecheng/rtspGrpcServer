@@ -73,6 +73,10 @@ public:
     // 服务端真实出帧率（每秒发布的帧数）。超过 3 秒没有新帧则返回 0（视为停流）。
     double getPublishFps() const;
 
+    // 落后源的时间（毫秒）：媒体时间轴相对墙钟落后的量。持续变大说明接收缓冲在堆积
+    // （观感就是“越播越滞后”）。负值/接近 0 表示跟得上源。
+    int64_t getMediaLagMs() const { return media_drift_ms_.load(std::memory_order_relaxed); }
+
     // 条件变量等待下一帧（零拷贝）
     bool waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms);
 
@@ -180,6 +184,24 @@ private:
     // 帧内存池
     std::shared_ptr<FrameMemoryPool> frame_pool_;
 
+    // 是否已有一个计算任务在途（在跑或已投递待跑）。
+    // 用于保证同一路流同一时刻只有一个计算任务：既保护 reusable_frame_，
+    // 又保证计算跟不上时 IO 线程直接丢帧而不是排队等锁（避免延迟持续堆积）。
+    std::atomic<bool> compute_scheduled_{false};
+
+    // ---- 流水线耗时剖析（每帧统计，RTSP_PROFILE=1 时每秒打印一次）----
+    // 用于定位“取流落后于源帧率导致延迟堆积”时到底是哪一段慢。
+    void profileAdd(std::atomic<uint64_t> &counter, std::chrono::steady_clock::time_point from);
+    void profileLogIfDue();
+    std::atomic<uint64_t> prof_frames_{0};
+    std::atomic<uint64_t> prof_lock_wait_us_{0}; // IO 线程等 decoder_mutex_
+    std::atomic<uint64_t> prof_grab_us_{0};      // demux + 解码
+    std::atomic<uint64_t> prof_sws_us_{0};       // retrieve（YUV→BGR）
+    std::atomic<uint64_t> prof_enc_us_{0};       // JPEG 编码 / 写 SHM
+    std::atomic<uint64_t> prof_drop_busy_{0};    // 因计算未完成而丢帧
+    std::atomic<uint64_t> prof_drop_interval_{0};// 因抽帧间隔而丢帧
+    std::chrono::steady_clock::time_point prof_last_log_ = std::chrono::steady_clock::now();
+
     // 心跳时间戳
     std::atomic<int64_t> last_access_time_;
 
@@ -203,6 +225,13 @@ private:
 
     std::atomic<uint64_t> frame_seq_{0};
     uint64_t last_grab_timestamp_ms_ = 0;
+
+    // 媒体时间轴 vs 墙钟的漂移：
+    //   漂移 = (墙钟推进量) - (媒体时间轴推进量)，持续变大说明服务端取流落后于源
+    //   （接收缓冲在堆积），观感就是“越播越滞后”。
+    int64_t media_pts_base_ms_ = 0;
+    int64_t media_wall_base_ms_ = 0;
+    std::atomic<int64_t> media_drift_ms_{0};
 
     // 出帧率统计（1 秒滚动窗口，无锁；发布点调用 recordPublishedFrame）
     void recordPublishedFrame();

@@ -1,4 +1,5 @@
 #include "stream_task.hpp"
+#include <cstdlib>
 #include "task_scheduler.hpp"
 #include "opencv_encoder.hpp"
 #include "turbojpeg_encoder.hpp"
@@ -383,9 +384,10 @@ void StreamTask::stepIO()
         spdlog::info("IO step skipped (not running): {}", url_);
         return;
     }
-        
 
+    auto prof_t_wait_lock = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(decoder_mutex_);
+    profileAdd(prof_lock_wait_us_, prof_t_wait_lock);
 
     // 处理解码器切换（协议变化，如 RTSP -> hik:// 或反向）
     if (decoder_changed_)
@@ -530,6 +532,7 @@ void StreamTask::stepIO()
         return;
     }
     auto grab_end = std::chrono::steady_clock::now();
+    profileAdd(prof_grab_us_, grab_start);
 
     // 成功拿到第一帧后，标记首帧已到达
     bool expected = false;
@@ -544,6 +547,21 @@ void StreamTask::stepIO()
     auto sys_now = std::chrono::system_clock::now();
     last_grab_timestamp_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         sys_now.time_since_epoch()).count();
+
+    // 媒体时间轴 vs 墙钟：漂移持续变大 = 服务端已经落后于源（接收缓冲在堆积）
+    {
+        const int64_t pts_ms = decoder_->lastFramePtsMs();
+        if (pts_ms != 0)
+        {
+            if (media_pts_base_ms_ == 0)
+            {
+                media_pts_base_ms_ = pts_ms;
+                media_wall_base_ms_ = last_grab_timestamp_ms_;
+            }
+            media_drift_ms_.store((last_grab_timestamp_ms_ - media_wall_base_ms_) - (pts_ms - media_pts_base_ms_),
+                                  std::memory_order_relaxed);
+        }
+    }
 
     // 3. 抽帧逻辑判断 (Frame dropping)
     //
@@ -592,6 +610,23 @@ void StreamTask::stepIO()
             return;
         }
 
+        // 同一路流同一时刻只允许一个计算任务在跑：
+        //   1) reusable_frame_ 的安全性：retrieve() 会覆写它，而上一个任务的编码
+        //      （转 BGR → JPEG）可能还在读它；
+        //   2) 实时性：一旦计算（尤其 JPEG 编码）跟不上源帧率，宁可丢帧也不能让 IO
+        //      线程排队等待——否则 RTSP 接收缓冲会持续堆积，表现为“播着播着延迟越来越高”。
+        //      丢帧只降低帧率，不会累积延迟。
+        bool expected = false;
+        if (!compute_scheduled_.compare_exchange_strong(expected, true))
+        {
+            prof_drop_busy_.fetch_add(1, std::memory_order_relaxed);
+            cv::Mat dummy;
+            decoder_->retrieve(dummy, false);
+            lock.unlock();
+            scheduleNext(1);
+            return;
+        }
+
         // 需要解码：释放锁，将任务派发给计算线程池
         lock.unlock();
         spdlog::debug("[stepIO] Enqueueing stepCompute to pool gpu_id={}", gpu_id_);
@@ -607,6 +642,13 @@ void StreamTask::stepIO()
                     spdlog::debug("[stepCompute] weak_ptr expired, task destroyed before compute");
                     return;
                 }
+
+                // 无论从下面哪条路径返回，都必须清掉“已投递”标志，否则该流会永久丢帧
+                struct ScheduledGuard
+                {
+                    std::atomic<bool> &flag;
+                    ~ScheduledGuard() { flag.store(false, std::memory_order_release); }
+                } scheduled_guard{self->compute_scheduled_};
 
                 // 任务开始执行时 task 仍在，但可能已经被 stop() 标记为 not running。
                 // 直接返回，避免在关闭期间做无意义的编码/写 SHM。
@@ -639,6 +681,7 @@ void StreamTask::stepIO()
     }
     else
     {
+        prof_drop_interval_.fetch_add(1, std::memory_order_relaxed);
         // 不需要解码（抽帧丢弃）：仅仅把刚才 grab 的数据从内部缓冲区清空
         cv::Mat dummy;
         decoder_->retrieve(dummy, false); // false 可能代表 fast/dummy retrieve
@@ -721,21 +764,33 @@ void StreamTask::stepCompute()
     }
 
     bool frame_ready = false;
-    
+
+    // 说明：decoder_mutex_ 只用于保护 decoder_ 指针切换（updateUrl/switchDecoder）和
+    // 解码器内部状态（含 retrieve 里的 sws 上下文）。编码（JPEG）、写 SHM 都不需要它，
+    // 所以下面在这些耗时操作前就释放锁——IO 线程的 grab() 也要这把锁，持锁做重活会把
+    // 编码耗时串进取流循环，使取流速度低于源帧率，接收缓冲持续堆积（延迟越来越高）。
+    //
     // === 分支 1: 共享内存模式 -> 直接传原始 Mat ===
     if (use_shared_mem_)
     {
-        bool retrieved = decoder_->retrieve(reusable_frame_, true);
-        if (retrieved && !reusable_frame_.empty())
+        auto t_sws = std::chrono::steady_clock::now();
+        bool retrieved = decoder_->retrieve(reusable_frame_, true) && !reusable_frame_.empty();
+        profileAdd(prof_sws_us_, t_sws);
+        lock.unlock(); // ← 写 SHM（memcpy + 可能的建/扩容）不持锁
+
+        if (retrieved)
         {
+            auto t_pub = std::chrono::steady_clock::now();
             // 首次解码成功后按实际帧大小创建 SHM；后续帧变大（如分辨率切换）时自动扩容重建
             ensureShmChannel(reusable_frame_);
 
             if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_))
             {
                 frame_ready = true;
+                prof_frames_.fetch_add(1, std::memory_order_relaxed);
                 recordPublishedFrame();
             }
+            profileAdd(prof_enc_us_, t_pub);
         }
     }
     else
@@ -746,6 +801,7 @@ void StreamTask::stepCompute()
         if (decoder_->getEncodedFrame(*encode_buffer))
         {
             frame_ready = true;
+            lock.unlock();
         }
         else
         {
@@ -764,6 +820,8 @@ void StreamTask::stepCompute()
 
             if (decoder_->isGpuFrame() && encoder->supportsGpuEncode())
             {
+                // GPU 路径：指纹帧（显存）由解码器持有，且 NVJPEG 编码本身很快，
+                // 这里保持持锁编码，避免与解码器复用同一块显存缓冲。
                 if (decoder_->retrieve(reusable_frame_, true))
                 {
                     uint8_t *gpu_ptr = decoder_->getGpuFramePtr();
@@ -773,12 +831,19 @@ void StreamTask::stepCompute()
                                                          decoder_->getHeight(), *encode_buffer);
                     }
                 }
+                lock.unlock();
             }
             else
             {
-                if (decoder_->retrieve(reusable_frame_, true) && !reusable_frame_.empty())
+                auto t_sws = std::chrono::steady_clock::now();
+                bool retrieved = decoder_->retrieve(reusable_frame_, true) && !reusable_frame_.empty();
+                profileAdd(prof_sws_us_, t_sws);
+                lock.unlock(); // ← 编码不持锁：IO 线程可以立即 grab 下一帧
+                if (retrieved)
                 {
+                    auto t_enc = std::chrono::steady_clock::now();
                     frame_ready = encoder->encode(reusable_frame_, *encode_buffer);
+                    profileAdd(prof_enc_us_, t_enc);
                 }
             }
         }
@@ -786,6 +851,7 @@ void StreamTask::stepCompute()
         // 编码/透传成功后通知订阅者
         if (frame_ready)
         {
+            prof_frames_.fetch_add(1, std::memory_order_relaxed);
             recordPublishedFrame();
             std::shared_ptr<std::string> prev_frame;
             {
@@ -801,8 +867,14 @@ void StreamTask::stepCompute()
         }
     }
     
-    lock.unlock();
-    
+    // 各分支已在重活前释放锁，这里只做保险
+    if (lock.owns_lock())
+    {
+        lock.unlock();
+    }
+
+    profileLogIfDue();
+
     // 立即调度下一帧（避免硬编码 sleep）
     scheduleNext(0);
 }
@@ -811,6 +883,45 @@ void StreamTask::updateHeartbeat()
 {
     auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     last_access_time_.store(now);
+}
+
+// ==================== 流水线耗时剖析 ====================
+
+void StreamTask::profileAdd(std::atomic<uint64_t> &counter, std::chrono::steady_clock::time_point from)
+{
+    counter.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                 std::chrono::steady_clock::now() - from)
+                                                 .count()),
+                      std::memory_order_relaxed);
+}
+
+void StreamTask::profileLogIfDue()
+{
+    static const bool enabled = (std::getenv("RTSP_PROFILE") != nullptr);
+    if (!enabled)
+        return;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - prof_last_log_).count();
+    if (elapsed_ms < 1000)
+        return;
+
+    uint64_t n = prof_frames_.exchange(0, std::memory_order_relaxed);
+    uint64_t lock_wait = prof_lock_wait_us_.exchange(0, std::memory_order_relaxed);
+    uint64_t grab = prof_grab_us_.exchange(0, std::memory_order_relaxed);
+    uint64_t sws = prof_sws_us_.exchange(0, std::memory_order_relaxed);
+    uint64_t enc = prof_enc_us_.exchange(0, std::memory_order_relaxed);
+    uint64_t drop_busy = prof_drop_busy_.exchange(0, std::memory_order_relaxed);
+    uint64_t drop_int = prof_drop_interval_.exchange(0, std::memory_order_relaxed);
+    prof_last_log_ = now;
+
+    if (n == 0 && drop_busy == 0 && drop_int == 0)
+        return;
+    const double d = n ? static_cast<double>(n) : 1.0;
+    spdlog::info("[profile] {} 发布 {:5.2f} FPS | 每帧: 等锁 {:.1f}ms 解码 {:.1f}ms 转BGR {:.1f}ms 编码/写SHM {:.1f}ms | 落后源 {:+.0f}ms | 丢帧 busy={} interval={}",
+                 stream_id_, n * 1000.0 / elapsed_ms, lock_wait / d / 1000.0, grab / d / 1000.0,
+                 sws / d / 1000.0, enc / d / 1000.0, media_drift_ms_.load(std::memory_order_relaxed) / 1000.0,
+                 drop_busy, drop_int);
 }
 
 // 每次成功发布一帧（写入 SHM 或编码为 JPEG）时调用。

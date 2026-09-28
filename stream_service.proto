@@ -89,6 +89,8 @@ message StreamInfo {
     bool only_key_frames = 10;
     bool use_shared_mem = 11;
     double fps = 12;              // 服务端真实出帧率（每秒发布的帧数），无帧/停流时为 0
+    int32 media_lag_ms = 13;      // 落后源的时长（ms）：媒体时间轴相对墙钟落后的量，
+                                  // 持续变大=接收缓冲在堆积（越播越滞后），0 表示跟得上源
 }
 
 message CheckRequest {

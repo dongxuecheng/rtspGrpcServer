@@ -1,9 +1,51 @@
 #include "cpu_decoder.hpp"
 #include <thread>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/ostr.h>
+
+// grab() 内的耗时拆分：demux（等网络/等下一个包） vs 解码本身。
+// 仅用于诊断（RTSP_PROFILE=1 时每秒打印一次）：“解码慢”和“在等源帧”是完全不同的结论。
+namespace
+{
+    struct GrabProfile
+    {
+        std::mutex m;
+        std::atomic<uint64_t> frames{0};
+        std::atomic<uint64_t> demux_us{0};
+        std::atomic<uint64_t> decode_us{0};
+        std::chrono::steady_clock::time_point last_log{std::chrono::steady_clock::now()};
+    };
+    GrabProfile g_grab_prof;
+
+    void profile_grab(uint64_t demux_us, uint64_t decode_us)
+    {
+        static const bool enabled = (std::getenv("RTSP_PROFILE") != nullptr);
+        if (!enabled)
+            return;
+
+        g_grab_prof.frames.fetch_add(1, std::memory_order_relaxed);
+        g_grab_prof.demux_us.fetch_add(demux_us, std::memory_order_relaxed);
+        g_grab_prof.decode_us.fetch_add(decode_us, std::memory_order_relaxed);
+
+        std::lock_guard<std::mutex> lk(g_grab_prof.m);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_grab_prof.last_log).count();
+        if (elapsed_ms < 1000)
+            return;
+        uint64_t n = g_grab_prof.frames.exchange(0, std::memory_order_relaxed);
+        uint64_t dm = g_grab_prof.demux_us.exchange(0, std::memory_order_relaxed);
+        uint64_t dc = g_grab_prof.decode_us.exchange(0, std::memory_order_relaxed);
+        g_grab_prof.last_log = now;
+        if (n == 0)
+            return;
+        spdlog::info("[profile/grab] {:5.2f} 次/s | 每帧: demux(等包) {:.1f}ms  解码+取帧 {:.1f}ms",
+                     n * 1000.0 / elapsed_ms, dm / (double)n / 1000.0, dc / (double)n / 1000.0);
+    }
+}
 
 bool CpuDecoder::open(const std::string &url)
 {
@@ -71,17 +113,33 @@ bool CpuDecoder::grab()
     int packet_size = 0;
     bool is_key = false;
 
+    uint64_t demux_us_total = 0;
+    uint64_t decode_us_total = 0;
+
     while (true)
     {
         // 1. 优先尝试从解码器内部缓存区拉取已解码的帧（因为1个Packet可能解出多个Frame，或者B帧导致延迟）
+        auto t_decode = std::chrono::steady_clock::now();
         if (decoder_->receive_frame(&current_frame_))
         {
+            decode_us_total += std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - t_decode)
+                                   .count();
             frame_ready_.store(true, std::memory_order_release);
+            profile_grab(demux_us_total, decode_us_total);
             return true; // 成功拿到一帧，退出 grab
         }
+        decode_us_total += std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - t_decode)
+                               .count();
 
-        // 2. 解码器内没有帧了，去 Demuxer 读新的数据包
-        if (!demuxer_->demux(&packet_data, &packet_size, &last_pts_, &is_key))
+        // 2. 解码器内没有帧了，去 Demuxer 读新的数据包（通常这里是“等下一个源帧”的网络等待）
+        auto t_demux = std::chrono::steady_clock::now();
+        bool demux_ok = demuxer_->demux(&packet_data, &packet_size, &last_pts_, &is_key);
+        demux_us_total += std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - t_demux)
+                              .count();
+        if (!demux_ok)
         {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::steady_clock::now() - open_time_)
@@ -95,11 +153,15 @@ bool CpuDecoder::grab()
 
         // 3. 将新读取的 Packet 送入解码器
         // 送入失败时跳过当前包，继续读取下一个包
+        auto t_send = std::chrono::steady_clock::now();
         if (!decoder_->send_packet(packet_data, packet_size, last_pts_))
         {
             spdlog::warn("Invalid or non-decodable packet skipped for stream {}", last_url_);
             continue;
         }
+        decode_us_total += std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - t_send)
+                               .count();
     }
 
     return true;

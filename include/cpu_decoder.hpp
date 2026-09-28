@@ -41,6 +41,7 @@ public:
     bool isGpuFrame() const override { return false; }
     uint8_t *getGpuFramePtr() override { return nullptr; }
     bool onlyKeyFrames() const override { return only_key_frames_; }
+    int64_t lastFramePtsMs() const override { return last_pts_; }
 
 private:
     bool reconnect(); // 重连辅助函数

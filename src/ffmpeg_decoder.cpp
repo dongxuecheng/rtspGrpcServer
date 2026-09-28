@@ -66,10 +66,35 @@ namespace FFHDDecoder
             }
 
             // 4. 打开解码器
+            //
+            // 多线程解码（关键）：AVCodecContext 的 thread_count 默认是 1，也就是单线程软解。
+            // 2560x1440 HEVC 单线程大约 20~25ms/帧，再叠加 sws_scale 转 BGR 和 JPEG 编码，
+            // 整条流水线就会逼近甚至超过源帧间隔（20fps → 50ms），使取流速度低于源帧率：
+            // RTSP 接收缓冲持续堆积，表现为“播着播着延迟越来越高”。
+            //
+            // 线程数用 RTSP_DEC_THREADS 可调（默认 4）。注意不要用 0/AUTO：
+            // 在 72 核机器上会按核数创建线程，切片并行的线程唤醒/同步开销反而变大，
+            // 也会和同流的编码线程抢缓存，实测比 1~4 线程更慢。
+            // 用 FF_THREAD_SLICE（WPP/切片并行）不引入帧重排序延迟，适合低延迟直播。
+            {
+                int dec_threads = 4;
+                if (const char *env_threads = std::getenv("RTSP_DEC_THREADS"))
+                {
+                    dec_threads = std::atoi(env_threads);
+                }
+                if (dec_threads > 0)
+                {
+                    m_ctx->thread_count = dec_threads;
+                    m_ctx->thread_type = FF_THREAD_SLICE;
+                }
+            }
+
             if (!checkFFMPEG(avcodec_open2(m_ctx, codec, nullptr)))
             {
                 return false;
             }
+
+            INFO("FFmpeg decoder threads: {} (thread_type={})", m_ctx->thread_count, m_ctx->thread_type);
 
             return true;
         }

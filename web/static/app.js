@@ -305,13 +305,15 @@ function renderStreams(streams) {
     const tdFps = document.createElement('td');
     tdFps.className = 'mono';
     const fps = Number(s.fps || 0);
+    const lagMs = Number(s.media_lag_ms || 0);
     tdFps.textContent = fps > 0 ? fps.toFixed(1) : '—';
     if (fps > 0) {
       // 与配置的抽帧间隔对比，方便一眼看出是否被限速
       const cap = s.decode_interval_ms > 0 ? 1000 / s.decode_interval_ms : 0;
-      tdFps.title = cap > 0
+      const lagTxt = lagMs > 0 ? `，落后源 ${lagMs}ms` : '，未落后于源';
+      tdFps.title = (cap > 0
         ? `服务端出帧 ${fps.toFixed(2)} FPS（抽帧间隔 ${s.decode_interval_ms}ms 理论上限 ${cap.toFixed(1)} FPS）`
-        : `服务端出帧 ${fps.toFixed(2)} FPS（未限制抽帧间隔）`;
+        : `服务端出帧 ${fps.toFixed(2)} FPS（未限制抽帧间隔）`) + lagTxt;
     } else {
       tdFps.title = '没有新帧（未连接 / 首帧未到 / 已停流）';
     }
@@ -324,6 +326,10 @@ function renderStreams(streams) {
     if (s.keep_on_failure) tdOpt.appendChild(tag('失败保持'));
     if (s.decode_interval_ms > 0) tdOpt.appendChild(tag(`间隔 ${s.decode_interval_ms}ms`));
     tdOpt.appendChild(tag(`心跳 ${Math.round(s.heartbeat_timeout_ms / 1000)}s`));
+    // 落后源超过 1 秒：说明接收缓冲在堆积（延迟会继续变大），醒目提示
+    if (lagMs > 1000) {
+      tdOpt.appendChild(tag(`落后 ${(lagMs / 1000).toFixed(1)}s`, '落后于源：接收缓冲堆积，延迟持续增大'));
+    }
 
     // --- 操作 ---
     const tdAct = document.createElement('td');

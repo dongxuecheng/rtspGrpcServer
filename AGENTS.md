@@ -322,6 +322,10 @@ python example.py [编号]      # 编号 1-10，或 all 顺序运行全部
 
 ## 开发提示
 
+- **出帧率与“越播越滞后”**：`StreamInfo.fps` 是服务端真实出帧率，`StreamInfo.media_lag_ms` 是**落后源**的时长（媒体时间轴相对墙钟落后的量）。`media_lag_ms` 持续变大 = RTSP 接收缓冲在堆积，观感就是“播着播着延迟越来越高”；Web 控制台在超过 1s 时会打醒目标签。
+  根因通常是**取流速度低于源帧率**：`stepCompute` 曾经在持有 `decoder_mutex_` 的情况下做 sws + JPEG 编码，把编码耗时串进了 IO 线程的 `grab()` 循环（1440p HEVC 软解 ~22ms + 转 BGR ~5ms + JPEG ~25ms > 源帧间隔 50ms）。现在 `stepIO` 用 `compute_scheduled_` 保证同一路流只有一个计算任务在跑，计算未完成时**直接丢帧**（保实时，不排队等锁），编码也不再持锁。
+  代价：CPU 软解 1440p + JPEG 时总工作量仍可能超过 50ms，表现为出帧率略低于源（约 15~18 FPS）。SHM 模式不做 JPEG 编码，可以稳定跑满源帧率；要同时兼顾 20 FPS 与 JPEG，需要 GPU 解码（NVCUVID + NVJPEG）或降低编码分辨率。
+- **性能剖析**：`RTSP_PROFILE=1` 启动服务端，会每秒打印各阶段平均耗时（等锁 / 解码 / demux 等待 / 转 BGR / JPEG 编码 / 落后源 / 丢帧数），用于定位瓶颈；另有 `RTSP_DEC_THREADS`（默认 4）控制软解线程数，**不要设 0/AUTO**（72 核机器上按核数建线程反而更慢）。
 - **proto 文件同步**：`stream_service.proto` 在根目录和 `client/` 下各有一份。修改后需要同时更新，并重新生成 C++ 和 Python 的 protobuf/gRPC 代码。
 - **共享内存布局一致性**：C++ 端 `include/zero_copy_channel.hpp` 中的 `ShmMeta` **带 `alignas(64)`**，因此真实布局是：`sequence@0`、`meta@64`（不是 8）、`sizeof(ShmMeta)=64`（不是 48）、**payload@128**（不是 56）、`sizeof(ShmFrameSlot)=128`；`static_assert` 已把这些值固化。**消费端一律不要硬编码这些偏移**，应使用 `GetShmLayout` 返回的偏移（C++ 用 `offsetof/sizeof` 算）：Python 客户端 `_ShmReader` 优先取服务端偏移（兜底常量仅为兼容旧桩），C++ 工具见 `tools/save_frames.cpp`。历史上就因为头文件里一行过时注释（`// 48 bytes, offset 8`）导致 Python 硬编码错偏移，所有帧被当成 `size==0` 丢弃（表现为“能连上但 0 帧”）。
 - **SHM 动态大小与运行中扩容**：`StreamTask::ensureShmChannel()` 在首帧解码后按实际帧大小创建 SHM（+25% 余量），帧变大（分辨率切换、`UpdateStream`）时会 `unlink` 旧对象并创建新对象（新的 inode）。因此**布局不能用 `GetShmLayout`（它只返回默认布局）**，消费端必须由 SHM 对象的实际文件大小反推（`total_size = 3 * slot_size + 8`，slot_size 为 64 的倍数）：Python 见 `derive_shm_layout_from_size()`，C++ 工具见 `tools/save_frames.cpp::deriveLayoutFromFileSize()`。由于旧映射在重建后会永久冻结在最后一帧，消费端还需在“一段时间没有新帧”后校验文件身份（`st_dev`/`st_ino`/大小）并重连：`_ShmReader._maybe_reconnect()` / `ShmReader::refreshIfStale()`；阻塞读必须分段等待信号量（`SHM_WAIT_SLICE_MS`），否则旧信号量等不到 `sem_post` 会卡死。

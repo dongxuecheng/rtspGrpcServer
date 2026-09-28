@@ -18,6 +18,11 @@ public:
     // 可实现此方法直接透传，避免解码再编码的二次损耗。默认不支持。
     virtual bool getEncodedFrame(std::string &out_buffer) { (void)out_buffer; return false; }
 
+    // 最近一帧的媒体时间轴时间戳（毫秒）。用于判断“服务端是否已经落后于源”：
+    // 把媒体时间轴推进量与实际墙钟推进量对比，差值持续变大即说明接收缓冲在堆积
+    // （表现为：看的画面越来越滞后于实时）。不支持时返回 0。
+    virtual int64_t lastFramePtsMs() const { return 0; }
+
     // GPU 帧支持（可选实现）
     virtual bool isGpuFrame() const { return false; }
     virtual uint8_t* getGpuFramePtr() { return nullptr; }
