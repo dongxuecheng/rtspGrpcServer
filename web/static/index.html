@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RTSP 流控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎥</text></svg>">
+</head>
+<body>
+
+<header>
+  <h1>RTSP 流控制台</h1>
+  <div class="header-right">
+    <span class="muted" id="server-addr">—</span>
+    <span class="badge" id="health">连接中…</span>
+    <label class="switch" title="每 2 秒自动刷新流列表">
+      <input type="checkbox" id="auto-refresh" checked> 自动刷新
+    </label>
+  </div>
+</header>
+
+<section class="card">
+  <h2>创建任务</h2>
+  <form id="create-form" class="grid-form">
+    <label class="span-3">RTSP URL
+      <input id="f-url" type="text" required spellcheck="false"
+             placeholder="rtsp://admin:密码@172.16.22.16:554/Streaming/Channels/101">
+    </label>
+
+    <label>解码器
+      <select id="f-decoder"></select>
+    </label>
+
+    <label>GPU ID
+      <input id="f-gpu" type="number" value="0" min="0" step="1">
+    </label>
+
+    <label>心跳超时 (ms)
+      <input id="f-hb" type="number" value="100000" min="1" max="3600000" step="1000">
+    </label>
+
+    <label>解码间隔 (ms)
+      <input id="f-interval" type="number" value="0" min="0" step="10">
+    </label>
+
+    <div class="checks span-3">
+      <label class="chk"><input type="checkbox" id="f-keyframe"> 仅关键帧</label>
+      <label class="chk" title="零拷贝读取原始帧，要求本页所在机器与服务端同机（同一 /dev/shm）">
+        <input type="checkbox" id="f-shm"> 使用共享内存 (SHM)
+      </label>
+      <label class="chk" title="连接失败时保留任务并持续重连">
+        <input type="checkbox" id="f-keep"> 失败保持
+      </label>
+      <button type="submit" id="btn-create">创建</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="row-between">
+    <h2>流列表 <span class="muted" id="count"></span></h2>
+    <div class="btn-row">
+      <button id="btn-refresh">刷新</button>
+      <button id="btn-stop-all" class="danger">全部停止</button>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>RTSP URL</th>
+          <th>状态</th>
+          <th>解码器</th>
+          <th>分辨率</th>
+          <th>选项</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody id="stream-rows"></tbody>
+    </table>
+  </div>
+  <p class="muted center" id="empty">暂无流，请在上方“创建任务”</p>
+</section>
+
+<section class="card" id="preview-card" hidden>
+  <div class="row-between">
+    <h2>预览 <span class="muted" id="preview-id"></span></h2>
+    <div class="btn-row">
+      <span class="muted" id="preview-stats"></span>
+      <button id="btn-snapshot">截图</button>
+      <button id="btn-close-preview">关闭</button>
+    </div>
+  </div>
+  <div class="preview-wrap">
+    <img id="preview-img" alt="流预览">
+    <p class="muted center" id="preview-hint" hidden></p>
+  </div>
+</section>
+
+<div id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

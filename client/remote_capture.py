@@ -12,6 +12,7 @@ import ctypes.util
 import logging
 import atexit
 import weakref
+import contextlib
 from typing import Optional, Tuple, List, Dict, Generator
 
 import cv2
@@ -72,9 +73,14 @@ STATUS_NAMES = {
 
 _DEFAULT_CHANNEL_OPTIONS = [
     ('grpc.max_receive_message_length', 10 * 1024 * 1024),
-    ('grpc.keepalive_time_ms', 5000),
-    ('grpc.keepalive_timeout_ms', 5000),
-    ('grpc.keepalive_permit_without_calls', True),
+    # keepalive 必须与服务端的 ping 防洪策略兼容：gRPC C++ 服务端默认
+    # min_recv_ping_interval_without_data=300s、max_ping_strikes=2，
+    # 空闲连接上每 5s 一次的 keepalive ping 会被判为 "too many pings" 并
+    # GOAWAY(ENHANCE_YOUR_CALM) 断开（表现为长时间空闲后 RPC 突然报 Too many pings）。
+    # 因此不在“无调用”时发 ping；仅在调用进行中由 keepalive 保活。
+    ('grpc.keepalive_time_ms', 30000),
+    ('grpc.keepalive_timeout_ms', 10000),
+    ('grpc.keepalive_permit_without_calls', False),
 ]
 
 
@@ -689,16 +695,41 @@ class _BaseRTSPClient:
         self._channel: Optional[grpc.Channel] = None
         self._stub: Optional[stream_service_pb2_grpc.RTSPStreamServiceStub] = None
 
-    def connect(self, options: Optional[List[tuple]] = None) -> bool:
+    def connect(self, options: Optional[List[tuple]] = None,
+                ready_timeout_sec: float = 3.0) -> bool:
+        """
+        建立 gRPC 连接。
+
+        :param options: 自定义 channel 参数
+        :param ready_timeout_sec: 等待 channel ready 的最长时间（秒）；<=0 表示不等待。
+            默认 3 秒：否则即使地址不可达也会“连接成功”，直到后续 RPC 才报 UNAVAILABLE，
+            容易让人误以为地址是对的。
+        """
         try:
             opts = options if options is not None else _DEFAULT_CHANNEL_OPTIONS
             self._channel = grpc.insecure_channel(self.server_address, options=opts)
             self._stub = stream_service_pb2_grpc.RTSPStreamServiceStub(self._channel)
-            logger.info(f"已连接到服务器: {self.server_address}")
-            return True
         except Exception as e:
             logger.error(f"连接服务器失败: {e}")
             return False
+
+        if ready_timeout_sec and ready_timeout_sec > 0:
+            try:
+                grpc.channel_ready_future(self._channel).result(timeout=ready_timeout_sec)
+            except Exception as e:  # 包括 FutureTimeoutError
+                logger.error(
+                    f"连接服务器失败: {self.server_address} 不可达 ({ready_timeout_sec:.0f}s 超时: {type(e).__name__})。\n"
+                    f"        请检查地址/端口是否正确、服务端是否在运行；\n"
+                    f"        容器部署常见映射为 -p 50052:50051（宿主 50052 → 容器 50051），同机可试 127.0.0.1:50052"
+                )
+                with contextlib.suppress(Exception):
+                    self._channel.close()
+                self._channel = None
+                self._stub = None
+                return False
+
+        logger.info(f"已连接到服务器: {self.server_address}")
+        return True
 
     def disconnect(self):
         if self._channel:
@@ -723,7 +754,8 @@ class _BaseRTSPClient:
         for attempt in range(max_retries + 1):
             try:
                 self.disconnect()
-                if not self.connect():
+                # 这里不需要 connect() 再做 ready 等待，下面会统一等待
+                if not self.connect(ready_timeout_sec=0):
                     raise RuntimeError("connect() returned False")
 
                 # 等待 channel 真正可用，避免服务端刚启动时立即调用失败

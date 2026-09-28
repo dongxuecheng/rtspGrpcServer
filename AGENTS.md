@@ -111,6 +111,10 @@ rtspGrpcServer/
 ├── docker-compose.cpu.yml # CPU-only 部署编排
 ├── entrypoint.sh          # 容器入口（nvcuvid 软链接、jemalloc 预加载）
 ├── stream_service.proto   # 主 gRPC/Protobuf 服务定义
+├── web/                   # Web 控制台（FastAPI BFF + 原生 JS 页面）
+│   ├── server.py          # REST + MJPEG 后端：查看流/预览截图/创建停止任务
+│   ├── static/            # index.html / app.js / style.css（无构建步骤）
+│   └── README.md          # 运行方式、接口与环境变量说明
 ├── README.md              # 详细中文文档（含 API、示例、SHM 用法）
 └── 编译.md                 # 逐步构建说明
 ```
@@ -321,6 +325,8 @@ python example.py [编号]      # 编号 1-10，或 all 顺序运行全部
 - **proto 文件同步**：`stream_service.proto` 在根目录和 `client/` 下各有一份。修改后需要同时更新，并重新生成 C++ 和 Python 的 protobuf/gRPC 代码。
 - **共享内存布局一致性**：C++ 端 `include/zero_copy_channel.hpp` 中的 `ShmMeta` **带 `alignas(64)`**，因此真实布局是：`sequence@0`、`meta@64`（不是 8）、`sizeof(ShmMeta)=64`（不是 48）、**payload@128**（不是 56）、`sizeof(ShmFrameSlot)=128`；`static_assert` 已把这些值固化。**消费端一律不要硬编码这些偏移**，应使用 `GetShmLayout` 返回的偏移（C++ 用 `offsetof/sizeof` 算）：Python 客户端 `_ShmReader` 优先取服务端偏移（兜底常量仅为兼容旧桩），C++ 工具见 `tools/save_frames.cpp`。历史上就因为头文件里一行过时注释（`// 48 bytes, offset 8`）导致 Python 硬编码错偏移，所有帧被当成 `size==0` 丢弃（表现为“能连上但 0 帧”）。
 - **SHM 动态大小与运行中扩容**：`StreamTask::ensureShmChannel()` 在首帧解码后按实际帧大小创建 SHM（+25% 余量），帧变大（分辨率切换、`UpdateStream`）时会 `unlink` 旧对象并创建新对象（新的 inode）。因此**布局不能用 `GetShmLayout`（它只返回默认布局）**，消费端必须由 SHM 对象的实际文件大小反推（`total_size = 3 * slot_size + 8`，slot_size 为 64 的倍数）：Python 见 `derive_shm_layout_from_size()`，C++ 工具见 `tools/save_frames.cpp::deriveLayoutFromFileSize()`。由于旧映射在重建后会永久冻结在最后一帧，消费端还需在“一段时间没有新帧”后校验文件身份（`st_dev`/`st_ino`/大小）并重连：`_ShmReader._maybe_reconnect()` / `ShmReader::refreshIfStale()`；阻塞读必须分段等待信号量（`SHM_WAIT_SLICE_MS`），否则旧信号量等不到 `sem_post` 会卡死。
+- **客户端 keepalive 参数**：`client/remote_capture.py::_DEFAULT_CHANNEL_OPTIONS` **不能**开启 `keepalive_permit_without_calls`（或把 `keepalive_time_ms` 设得很小）。服务端用 gRPC 默认 ping 防洪策略（`min_recv_ping_interval_without_data=300s`、`max_ping_strikes=2`），空闲连接上频繁的 keepalive ping 会被 GOAWAY(`ENHANCE_YOUR_CALM "too many pings"`) 断开，表现为“空闲一会儿后 RPC 突然报 Too many pings”。另外 `connect()` 默认会等待 channel ready（3s），地址不可达时直接返回 False 并打印可操作提示，不再“假连接成功”。
+- **Web 控制台**：`web/server.py` 是 FastAPI BFF（REST + MJPEG），复用 `client/remote_capture.py`。服务端在 SHM 模式下不产出 JPEG，所以 SHM 流的预览由后端读共享内存再编码 JPEG，**要求后端与服务端同机**；跨机时只能用 gRPC JPEG 模式的流。控制类请求共用一个长连接（避免连接抖动），每个 MJPEG 预览会话用独立客户端。Web 端**不做鉴权**，默认监听 `0.0.0.0:8080`（`WEB_HOST`/`WEB_PORT` 可改）。
 - **信号量必须先于 SHM 创建**：`ZeroCopyChannel` 构造函数中 `sem_open` 在 `shm_open` **之前**执行。因为 `shm_open(O_CREAT)` 会让 SHM 文件立刻对客户端可见，客户端一看到文件就会 `sem_open`；若信号量晚于 SHM 出现，客户端会因 ENOENT 退化到轮询模式（客户端另有 `_ShmReader._try_attach_notify_sem()` 做惰性重试与自动升级作为兜底）。
 - **海康 SDK 放置**：`CMakeLists.txt` 默认在 `${CMAKE_SOURCE_DIR}/sdk/hikvision` 下查找 SDK 头文件（`hik_header/HCNetSDK.h`）和库文件（`hik_libs/libhcnetsdk.so` 等）。可通过 `-DHIKVISION_SDK_ROOT=/path/to/sdk` 指定其他路径；若未找到，CMake 会警告，`src/hik.cpp` / `src/hik_decoder.cpp` 不会被编译，`DECODER_HIK_SDK` 将降级为 CPU 解码器并运行时报错。
 - **Docker 中的海康 SDK**：`Dockerfile` / `Dockerfile.cpu` 会把 `sdk/hikvision` 复制到镜像 `/opt/hikvision`，并通过 `LD_LIBRARY_PATH` 和 `ldconfig` 使其可被 `rtsp_server` 加载。`entrypoint.sh` 也做了兜底导出。
