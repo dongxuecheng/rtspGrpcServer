@@ -1036,6 +1036,7 @@ class RTSPClient(_BaseRTSPClient):
         self._stream_params: Dict[str, dict] = {}      # original_stream_id -> 启动参数
         self._stream_id_map: Dict[str, str] = {}       # original_stream_id -> current_stream_id
         self._shm_layout: Optional[dict] = None        # 服务端 GetShmLayout 缓存（结构体偏移）
+        self._shm_missing_log_at: Dict[str, float] = {}   # 抑制“共享内存不可见”告警刷屏
         # 注册进程退出兜底清理：避免客户端异常退出后 mmap 长期占用 tmpfs 空间
         atexit.register(_cleanup_client_on_exit, weakref.ref(self))
 
@@ -1253,10 +1254,14 @@ class RTSPClient(_BaseRTSPClient):
             if not reader.exists():
                 # 服务端扩容时会 unlink 旧对象再创建新对象，存在极短的窗口期；
                 # 也可能是流已停止/服务端重启，下一次调用会自动重试。
-                logger.warning(
-                    f"[RTSPClient] 共享内存当前不可见（可能正在扩容重建或流已停止）: /dev/shm/{stream_id}，"
-                    f"请确认客户端与服务端在同一主机且 Docker 挂载了 -v /dev/shm:/dev/shm"
-                )
+                # 预览会高频轮询，这里按流节流，避免刷屏。
+                now = time.monotonic()
+                if now - self._shm_missing_log_at.get(stream_id, 0.0) >= 5.0:
+                    self._shm_missing_log_at[stream_id] = now
+                    logger.warning(
+                        f"[RTSPClient] 共享内存当前不可见（可能正在扩容重建、流已停止或未启动 SHM）: "
+                        f"/dev/shm/{stream_id}，请确认客户端与服务端在同一主机且 Docker 挂载了 -v /dev/shm:/dev/shm"
+                    )
                 return None
             return reader
 

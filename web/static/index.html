@@ -100,6 +100,21 @@
   </div>
 </section>
 
+<div id="modal" class="modal-mask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title"></h3>
+    <p id="modal-desc" class="modal-desc"></p>
+    <div id="modal-field">
+      <textarea id="modal-input" spellcheck="false" autocomplete="off"></textarea>
+      <p id="modal-error" class="field-error" hidden></p>
+    </div>
+    <div class="modal-actions">
+      <button id="modal-cancel">取消</button>
+      <button id="modal-ok" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
 <div id="toasts"></div>
 
 <script src="/static/app.js"></script>

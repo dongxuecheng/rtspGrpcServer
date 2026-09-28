@@ -57,6 +57,145 @@ function button(text, cls, onClick) {
   return b;
 }
 
+/* ==================== 复制（兼容非安全上下文）==================== */
+
+async function copyText(text) {
+  // 安全上下文（https / localhost）优先用 Clipboard API
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) { /* 落到下面的兜底 */ }
+  }
+  // 非安全上下文（如 http://局域网IP）浏览器不提供 Clipboard API，用 execCommand 兜底
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function copyStreamId(streamId) {
+  if (await copyText(streamId)) {
+    toast('已复制 stream_id', 'ok', 1500);
+    return;
+  }
+  // 浏览器完全禁止自动复制时，给一个可手动复制的对话框（已全选，Ctrl/Cmd+C 即可）
+  await openDialog({
+    type: 'prompt',
+    title: '手动复制',
+    desc: '浏览器不允许自动复制（通常因为页面不是 HTTPS），请按 Ctrl/Cmd + C：',
+    value: streamId,
+    readonly: true,
+    multiline: true,
+    okText: '完成',
+  });
+}
+
+/* ==================== 模态对话框 ==================== */
+
+function openDialog(opts = {}) {
+  return new Promise((resolve) => {
+    const mask = $('#modal');
+    const input = $('#modal-input');
+    const err = $('#modal-error');
+    const okBtn = $('#modal-ok');
+    const cancelBtn = $('#modal-cancel');
+    const isPrompt = opts.type !== 'confirm';
+
+    $('#modal-title').textContent = opts.title || '';
+    const descEl = $('#modal-desc');
+    descEl.textContent = opts.desc || '';
+    descEl.hidden = !opts.desc;
+
+    $('#modal-field').hidden = !isPrompt;
+    input.value = opts.value || '';
+    input.placeholder = opts.placeholder || '';
+    input.readOnly = !!opts.readonly;
+    input.rows = opts.multiline ? 4 : 1;
+    err.textContent = '';
+    err.hidden = true;
+
+    okBtn.textContent = opts.okText || '确定';
+    okBtn.className = opts.danger ? 'danger' : 'primary';
+    okBtn.disabled = false;
+
+    mask.hidden = false;
+
+    const close = (result) => {
+      mask.hidden = true;
+      okBtn.onclick = cancelBtn.onclick = mask.onclick = document.onkeydown = null;
+      resolve(result);
+    };
+    const cancel = () => close(isPrompt ? null : false);
+
+    const accept = async () => {
+      if (!isPrompt) { close(true); return; }
+
+      const value = input.value.trim();
+      if (opts.validate) {
+        const msg = opts.validate(value);
+        if (msg) {
+          err.textContent = msg;
+          err.hidden = false;
+          input.focus();
+          return;
+        }
+      }
+
+      if (opts.submit) {
+        const label = okBtn.textContent;
+        okBtn.disabled = true;
+        okBtn.textContent = '处理中…';
+        try {
+          await opts.submit(value);
+        } catch (e) {
+          err.textContent = e.message || String(e);
+          err.hidden = false;
+          okBtn.disabled = false;
+          okBtn.textContent = label;
+          input.focus();
+          return;
+        }
+        okBtn.disabled = false;
+        okBtn.textContent = label;
+      }
+      close(value);
+    };
+
+    okBtn.onclick = accept;
+    cancelBtn.onclick = cancel;
+    mask.onclick = (e) => { if (e.target === mask) cancel(); };
+    document.onkeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      else if (e.key === 'Enter' && (!opts.multiline || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        accept();
+      }
+    };
+
+    setTimeout(() => {
+      if (isPrompt) {
+        input.focus();
+        input.select();   // 便于直接粘贴新 URL，或 Ctrl+C 手工复制
+      } else {
+        okBtn.focus();
+      }
+    }, 0);
+  });
+}
+
 /* ==================== 顶部状态 ==================== */
 
 async function loadMeta() {
@@ -110,14 +249,7 @@ function renderStreams(streams) {
     idSpan.className = 'mono';
     idSpan.textContent = s.stream_id.length > 22 ? `${s.stream_id.slice(0, 22)}…` : s.stream_id;
     idSpan.title = s.stream_id;
-    tdId.append(idSpan, button('复制', 'mini', async () => {
-      try {
-        await navigator.clipboard.writeText(s.stream_id);
-        toast('已复制 stream_id', 'ok', 1500);
-      } catch (_) {
-        toast('复制失败（浏览器限制）', 'err');
-      }
-    }));
+    tdId.append(idSpan, button('复制', 'mini', () => copyStreamId(s.stream_id)));
 
     // --- URL ---
     const tdUrl = document.createElement('td');
@@ -215,7 +347,14 @@ async function createStream(event) {
 }
 
 async function stopStream(streamId) {
-  if (!window.confirm(`确定停止 ${streamId} ？`)) return;
+  const ok = await openDialog({
+    type: 'confirm',
+    title: '停止流',
+    desc: `确定停止该任务吗？\n${streamId}`,
+    okText: '停止',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await api(`/api/streams/${encodeURIComponent(streamId)}/stop`, { method: 'POST' });
     toast('已停止', 'ok');
@@ -229,7 +368,14 @@ async function stopStream(streamId) {
 
 async function stopAll() {
   if (!state.streams.length) { toast('当前没有流', 'warn'); return; }
-  if (!window.confirm(`确定停止全部 ${state.streams.length} 路流？`)) return;
+  const ok = await openDialog({
+    type: 'confirm',
+    title: '全部停止',
+    desc: `确定停止全部 ${state.streams.length} 路流吗？`,
+    okText: '全部停止',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     const res = await api('/api/streams/stop-all', { method: 'POST' });
     toast(`已停止 ${res.stopped.length} 路${res.failed.length ? `，失败 ${res.failed.length} 路` : ''}`,
@@ -243,16 +389,28 @@ async function stopAll() {
 }
 
 async function changeUrl(stream) {
-  const input = window.prompt('输入新的 RTSP URL：', stream.rtsp_url);
-  if (!input || input === stream.rtsp_url) return;
-  try {
-    await api(`/api/streams/${encodeURIComponent(stream.stream_id)}`,
-      { method: 'PATCH', body: JSON.stringify({ new_rtsp_url: input.trim() }) });
-    toast('URL 已更新，任务将重连', 'ok');
-    await loadStreams();
-  } catch (e) {
-    toast(`更新失败：${e.message}`, 'err');
-  }
+  const value = await openDialog({
+    type: 'prompt',
+    title: '修改 RTSP URL',
+    desc: `任务 ${stream.stream_id}\n当前：${stream.rtsp_url}`,
+    value: stream.rtsp_url,
+    multiline: true,
+    okText: '保存',
+    placeholder: 'rtsp://admin:密码@172.16.22.16:554/Streaming/Channels/101',
+    validate: (v) => {
+      if (!v) return 'URL 不能为空';
+      if (!/^(rtsp|hik):\/\//i.test(v)) return 'URL 需以 rtsp:// 或 hik:// 开头';
+      if (v === stream.rtsp_url) return '与当前 URL 相同，无需修改';
+      return null;
+    },
+    submit: async (v) => {
+      await api(`/api/streams/${encodeURIComponent(stream.stream_id)}`,
+        { method: 'PATCH', body: JSON.stringify({ new_rtsp_url: v }) });
+    },
+  });
+  if (value === null) return;
+  toast('URL 已更新，任务将重连', 'ok');
+  await loadStreams();
 }
 
 async function snapshot(streamId) {
@@ -316,9 +474,19 @@ async function refreshStats() {
   if (!id) return;
   try {
     const st = await api(`/api/streams/${encodeURIComponent(id)}/stats`);
-    const age = st.last_ts ? `${Math.max(0, Date.now() - st.last_ts)}ms` : '—';
-    $('#preview-stats').textContent =
-      `预览 ${st.fps.toFixed(1)} FPS · 已发送 ${st.sent} 帧 · 帧延迟 ${age}`;
+    const ageMs = st.last_ts ? Math.max(0, Date.now() - st.last_ts) : null;
+    const ageTxt = ageMs === null
+      ? '—'
+      : (ageMs >= 1000 ? `${(ageMs / 1000).toFixed(1)}s` : `${ageMs}ms`);
+    const stale = ageMs !== null && ageMs > 2000;
+
+    const el = $('#preview-stats');
+    el.textContent = `预览 ${st.fps.toFixed(1)} FPS · 已发送 ${st.sent} 帧 · 帧龄 ${ageTxt}`
+      + (stale ? ' ⚠' : '');
+    el.className = stale ? 'muted warn-text' : 'muted';
+    el.title = stale
+      ? '帧龄偏大：服务端解码管线落后于采集（常见于刚起流、CPU 解码跟不上或源帧率过高）'
+      : '显示画面相对当前时间的新鲜度';
   } catch (_) {
     $('#preview-stats').textContent = '';
   }
