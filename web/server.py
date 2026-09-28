@@ -187,17 +187,21 @@ def _preview_sent(stream_id: str, ts: int) -> None:
             win.popleft()
 
 
-def _preview_stats(stream_id: str, server_fps: float = 0.0) -> dict:
+def _preview_stats(stream_id: str, server_fps: float = 0.0,
+                   server_glitch_ratio: float = 0.0, server_corrupted: int = 0) -> dict:
     """预览统计。
 
-    server_fps: 服务端真实出帧率（来自 StreamInfo.fps，0 表示未知/停流）
-    send_fps  : 单个观众视角下，本进程实际发送的帧率（滑动窗口）
+    server_fps            : 服务端真实出帧率（来自 StreamInfo.fps，0 表示未知/停流）
+    server_glitch_ratio   : 服务端最近 1 秒花屏帧占比（0 表示正常）
+    server_corrupted      : 服务端累计花屏帧数
+    send_fps              : 单个观众视角下，本进程实际发送的帧率（滑动窗口）
     """
     with _PREVIEW_LOCK:
         st = _PREVIEWS.get(stream_id)
         if not st:
             return {"viewers": 0, "sent": 0, "send_fps": 0.0, "server_fps": server_fps,
-                    "last_ts": 0}
+                    "server_glitch_ratio": server_glitch_ratio,
+                    "server_corrupted_frames": server_corrupted, "last_ts": 0}
         viewers = max(1, st["viewers"])
         win: Deque[float] = st["send_win"]
         if len(win) >= 2 and win[-1] > win[0]:
@@ -207,6 +211,8 @@ def _preview_stats(stream_id: str, server_fps: float = 0.0) -> dict:
             send_fps = 0.0
         return {"viewers": st["viewers"], "sent": st["sent"],
                 "send_fps": round(send_fps, 2), "server_fps": round(server_fps, 2),
+                "server_glitch_ratio": round(server_glitch_ratio, 4),
+                "server_corrupted_frames": server_corrupted,
                 "last_ts": st["last_ts"]}
 
 
@@ -394,14 +400,18 @@ def api_mjpeg(stream_id: str,
 
 @app.get("/api/streams/{stream_id}/stats")
 def api_stream_stats(stream_id: str):
-    """预览统计：send_fps（本进程发送）/ server_fps（服务端真实出帧率）"""
+    """预览统计：send_fps（本进程发送）/ server_fps（服务端真实出帧率）/ 花屏情况"""
     server_fps = 0.0
+    glitch_ratio = 0.0
+    corrupted = 0
     with contextlib.suppress(HTTPException, grpc.RpcError, Exception):
         with grpc_client() as client:
             info = client.check_stream(stream_id)
             if info:
                 server_fps = float(info.get("fps") or 0.0)
-    return _preview_stats(stream_id, server_fps)
+                glitch_ratio = float(info.get("glitch_ratio") or 0.0)
+                corrupted = int(info.get("corrupted_frames") or 0)
+    return _preview_stats(stream_id, server_fps, glitch_ratio, corrupted)
 
 
 # ==================== 静态页面 ====================

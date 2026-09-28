@@ -364,6 +364,14 @@ td .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wra
   opacity: 0.72;
 }
 
+/* 健康状态：已连接且从未花屏 */
+.tag.ok {
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.32);
+  color: var(--ok);
+  opacity: 0.9;
+}
+
 .empty {
   display: flex;
   flex-direction: column;

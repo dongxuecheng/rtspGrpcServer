@@ -338,6 +338,10 @@ function renderStreams(streams) {
     } else if (corrupted > 0) {
       tdOpt.appendChild(tag(`花屏累计 ${corrupted}`,
         `曾经出现 ${corrupted} 帧解码错误（当前已恢复正常）`, 'muted'));
+    } else if (s.status_name === '已连接') {
+      // 已连接且从无花屏：也明确显示一次，否则“无花屏”与“功能未生效”看起来一样
+      tdOpt.appendChild(tag('无花屏',
+        '解码器从未上报花屏（缺参考帧 / 错误掩盖 / 码流非法），画面正常', 'ok'));
     }
     // 落后源超过 1 秒：说明接收缓冲在堆积（延迟会继续变大），醒目提示
     if (lagMs > 1000) {
@@ -750,10 +754,16 @@ function renderPreviewStats() {
   const srcTxt = server.server_fps ? `服务端出帧 ${server.server_fps.toFixed(1)} FPS` : '服务端出帧 —';
   const sendTxt = server.send_fps ? `预览发送 ${server.send_fps.toFixed(1)} FPS` : '预览发送 —';
   const sizeTxt = viewer.lastSize ? ` · ${viewer.lastSize}` : '';
+  // 花屏状态常显：无花屏时也要能看到（否则“正常”与“功能没生效”看起来一样）
+  const gRatio = Number(server.server_glitch_ratio || 0);
+  const gTotal = Number(server.server_corrupted_frames || 0);
+  const glitchTxt = gRatio > 0
+    ? ` · 花屏 ${(gRatio * 100).toFixed(0)}%`
+    : (gTotal > 0 ? ` · 花屏累计 ${gTotal}` : ' · 无花屏');
 
-  el.textContent = `${srcTxt} → ${sendTxt} → 客户端 ${viewer.fps.toFixed(1)} FPS · 端到端延迟 ${lagTxt}${sizeTxt}`
+  el.textContent = `${srcTxt} → ${sendTxt} → 客户端 ${viewer.fps.toFixed(1)} FPS · 端到端延迟 ${lagTxt}${sizeTxt}${glitchTxt}`
     + (stale ? ' ⚠' : '');
-  el.className = stale ? 'muted warn-text' : 'muted';
+  el.className = stale || gRatio > 0 ? 'muted warn-text' : 'muted';
   el.title = '服务端出帧：服务端每秒发布的新帧数（与预览限速无关）'
     + '；预览发送：本进程向浏览器实际发出的帧率（受当前画质档位的 fps 限制）'
     + '；客户端：浏览器实际渲染帧率。三者差距定位瓶颈，端到端延迟含网络/隧道积压';
