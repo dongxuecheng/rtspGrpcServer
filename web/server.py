@@ -28,7 +28,8 @@ import os
 import sys
 import threading
 import time
-from typing import Dict, Iterator, List, Optional
+from collections import deque
+from typing import Deque, Dict, Iterator, List, Optional, Tuple
 
 import cv2
 import grpc
@@ -145,19 +146,23 @@ def grab_jpeg(client: RTSPClient, stream_id: str,
 
 
 # ==================== 预览统计 ====================
+# 说明：这里统计的 fps 是“本进程向浏览器实际发送”的帧率（受 ?fps= 限速影响），
+# 不是服务端出帧率。服务端真实出帧率由 C++ 侧统计并通过 ListStreams/CheckStream
+# 的 StreamInfo.fps 上报（见 server_fps）。
 
 _PREVIEW_LOCK = threading.Lock()
 _PREVIEWS: Dict[str, dict] = {}
 
+# 滑动窗口长度：用窗口内的发送事件数 / 窗口时长，得到“最近的”发送帧率，
+# 而不是从预览开始到现在的累计平均值（累计值会从 0 缓慢爬升、卡顿后又不降）。
+_PREVIEW_WINDOW_S = 3.0
+
 
 def _preview_enter(stream_id: str) -> None:
     with _PREVIEW_LOCK:
-        st = _PREVIEWS.setdefault(stream_id, {"viewers": 0, "sent": 0, "fps": 0.0,
-                                              "last_ts": 0, "started": 0.0, "_n": 0})
+        st = _PREVIEWS.setdefault(stream_id, {"viewers": 0, "sent": 0, "last_ts": 0,
+                                              "send_win": deque()})
         st["viewers"] += 1
-        # 每次新开预览都重新计时，保证 FPS 反映本次会话
-        st["started"] = time.time()
-        st["_n"] = 0
 
 
 def _preview_exit(stream_id: str) -> None:
@@ -173,22 +178,36 @@ def _preview_sent(stream_id: str, ts: int) -> None:
         if not st:
             return
         st["sent"] += 1
-        st["_n"] += 1
         st["last_ts"] = ts
-        elapsed = time.time() - st["started"]
-        if elapsed > 0:
-            st["fps"] = st["_n"] / elapsed
+        now = time.monotonic()
+        win: Deque[float] = st["send_win"]
+        win.append(now)
+        cutoff = now - _PREVIEW_WINDOW_S
+        while win and win[0] < cutoff:
+            win.popleft()
 
 
-def _preview_stats(stream_id: str) -> dict:
+def _preview_stats(stream_id: str, server_fps: float = 0.0) -> dict:
+    """预览统计。
+
+    server_fps: 服务端真实出帧率（来自 StreamInfo.fps，0 表示未知/停流）
+    send_fps  : 单个观众视角下，本进程实际发送的帧率（滑动窗口）
+    """
     with _PREVIEW_LOCK:
         st = _PREVIEWS.get(stream_id)
         if not st:
-            return {"viewers": 0, "sent": 0, "fps": 0.0, "last_ts": 0}
+            return {"viewers": 0, "sent": 0, "send_fps": 0.0, "server_fps": server_fps,
+                    "last_ts": 0}
         viewers = max(1, st["viewers"])
+        win: Deque[float] = st["send_win"]
+        if len(win) >= 2 and win[-1] > win[0]:
+            # 窗口内事件数 / 窗口跨度；多观众时按人数平摊，得到单观众帧率
+            send_fps = (len(win) - 1) / (win[-1] - win[0]) / viewers
+        else:
+            send_fps = 0.0
         return {"viewers": st["viewers"], "sent": st["sent"],
-                # fps 是多个预览会话的合计，这里换算成“单个观众看到的发送帧率”
-                "fps": round(st["fps"] / viewers, 2), "last_ts": st["last_ts"]}
+                "send_fps": round(send_fps, 2), "server_fps": round(server_fps, 2),
+                "last_ts": st["last_ts"]}
 
 
 # ==================== 请求/响应模型 ====================
@@ -373,7 +392,14 @@ def api_mjpeg(stream_id: str,
 
 @app.get("/api/streams/{stream_id}/stats")
 def api_stream_stats(stream_id: str):
-    return _preview_stats(stream_id)
+    """预览统计：send_fps（本进程发送）/ server_fps（服务端真实出帧率）"""
+    server_fps = 0.0
+    with contextlib.suppress(HTTPException, grpc.RpcError, Exception):
+        with grpc_client() as client:
+            info = client.check_stream(stream_id)
+            if info:
+                server_fps = float(info.get("fps") or 0.0)
+    return _preview_stats(stream_id, server_fps)
 
 
 # ==================== 静态页面 ====================

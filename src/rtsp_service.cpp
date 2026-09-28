@@ -377,6 +377,7 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
         info->set_use_shared_mem(task->usesSharedMemory());
         info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
         info->set_keep_on_failure(task->shouldKeepOnFailure());
+        info->set_fps(task->getPublishFps());
 
         switch (task->getStatus())
         {
@@ -424,6 +425,7 @@ grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const st
         stream_info->set_use_shared_mem(task->usesSharedMemory());
         stream_info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
         stream_info->set_keep_on_failure(task->shouldKeepOnFailure());
+        stream_info->set_fps(task->getPublishFps());
 
     }
     return grpc::Status::OK;

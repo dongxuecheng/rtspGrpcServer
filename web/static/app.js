@@ -301,6 +301,21 @@ function renderStreams(streams) {
     tdRes.className = 'mono';
     tdRes.textContent = s.width && s.height ? `${s.width}×${s.height}` : '—';
 
+    // --- 帧率（服务端真实出帧率，由 C++ 侧统计） ---
+    const tdFps = document.createElement('td');
+    tdFps.className = 'mono';
+    const fps = Number(s.fps || 0);
+    tdFps.textContent = fps > 0 ? fps.toFixed(1) : '—';
+    if (fps > 0) {
+      // 与配置的抽帧间隔对比，方便一眼看出是否被限速
+      const cap = s.decode_interval_ms > 0 ? 1000 / s.decode_interval_ms : 0;
+      tdFps.title = cap > 0
+        ? `服务端出帧 ${fps.toFixed(2)} FPS（抽帧间隔 ${s.decode_interval_ms}ms 理论上限 ${cap.toFixed(1)} FPS）`
+        : `服务端出帧 ${fps.toFixed(2)} FPS（未限制抽帧间隔）`;
+    } else {
+      tdFps.title = '没有新帧（未连接 / 首帧未到 / 已停流）';
+    }
+
     // --- 选项 ---
     const tdOpt = document.createElement('td');
     tdOpt.appendChild(tag(s.use_shared_mem ? 'SHM' : 'JPEG', s.use_shared_mem
@@ -322,7 +337,7 @@ function renderStreams(streams) {
     );
     tdAct.appendChild(actions);
 
-    tr.append(tdId, tdUrl, tdStatus, tdDecoder, tdRes, tdOpt, tdAct);
+    tr.append(tdId, tdUrl, tdStatus, tdDecoder, tdRes, tdFps, tdOpt, tdAct);
     tbody.appendChild(tr);
   });
 
@@ -697,15 +712,16 @@ function renderPreviewStats() {
     ? '—'
     : (viewer.lagMs >= 1000 ? `${(viewer.lagMs / 1000).toFixed(1)}s` : `${Math.round(viewer.lagMs)}ms`);
   const stale = viewer.lagMs > PREVIEW_LAG_RESYNC_MS;
-  const serverTxt = server.fps ? `服务端 ${server.fps.toFixed(1)} FPS` : '服务端 —';
+  const srcTxt = server.server_fps ? `服务端出帧 ${server.server_fps.toFixed(1)} FPS` : '服务端出帧 —';
+  const sendTxt = server.send_fps ? `预览发送 ${server.send_fps.toFixed(1)} FPS` : '预览发送 —';
   const sizeTxt = viewer.lastSize ? ` · ${viewer.lastSize}` : '';
 
-  el.textContent = `客户端 ${viewer.fps.toFixed(1)} FPS · ${serverTxt} · 端到端延迟 ${lagTxt}${sizeTxt}`
+  el.textContent = `${srcTxt} → ${sendTxt} → 客户端 ${viewer.fps.toFixed(1)} FPS · 端到端延迟 ${lagTxt}${sizeTxt}`
     + (stale ? ' ⚠' : '');
   el.className = stale ? 'muted warn-text' : 'muted';
-  el.title = stale
-    ? '延迟持续偏大：接收速度跟不上发送速度（常见于 VS Code 端口转发/远程网络），已自动重新同步'
-    : '端到端延迟 = 浏览器收到并渲染该帧时，它已经“在途”多久（含网络/隧道积压）';
+  el.title = '服务端出帧：服务端每秒发布的新帧数（与预览限速无关）'
+    + '；预览发送：本进程向浏览器实际发出的帧率（受当前画质档位的 fps 限制）'
+    + '；客户端：浏览器实际渲染帧率。三者差距定位瓶颈，端到端延迟含网络/隧道积压';
 }
 
 async function refreshServerStats() {

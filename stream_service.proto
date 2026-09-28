@@ -88,6 +88,7 @@ message StreamInfo {
     bool keep_on_failure = 9;
     bool only_key_frames = 10;
     bool use_shared_mem = 11;
+    double fps = 12;              // 服务端真实出帧率（每秒发布的帧数），无帧/停流时为 0
 }
 
 message CheckRequest {

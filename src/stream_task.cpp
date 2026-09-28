@@ -102,6 +102,8 @@ StreamTask::StreamTask(const std::string &url,
     frame_pool_ = FrameMemoryPool::create(3 * 1024 * 1024);
     updateHeartbeat();
     last_encode_time_ = std::chrono::steady_clock::now();
+    // 首帧必须立即放行：初始截止时间放到过去
+    next_process_deadline_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
     first_grab_attempt_time_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
 
 #ifdef RTSP_ENABLE_CUDA
@@ -468,6 +470,8 @@ void StreamTask::stepIO()
             consecutive_failures_ = 0;
             // 连接成功后，重置编码时间，准备立即出第一帧
             last_encode_time_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            // 重连后源时间轴已变，抽帧截止时间重新对齐
+            next_process_deadline_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
             // 记录首次尝试抓取的时间，用于首帧宽限期判断
             first_grab_attempt_time_ = std::chrono::steady_clock::now();
             first_frame_seen_.store(false, std::memory_order_release);
@@ -542,16 +546,36 @@ void StreamTask::stepIO()
         sys_now.time_since_epoch()).count();
 
     // 3. 抽帧逻辑判断 (Frame dropping)
+    //
+    // 注意：判断基准是“帧到达时刻”(grab 完成)，不是“上一帧发布完成时刻”。
+    // 之前用 last_encode_time_（编码+发布之后才赋值）作基准，会把编码耗时和
+    // 线程池排队时间算进间隔里，导致源帧间隔 50ms、decode_interval=50ms 时
+    // 每次判定都差几毫秒而白丢一整帧（丢一帧要等下一个源帧，实际出帧率直接
+    // 掉到 ~8.5 FPS 而不是 20 FPS）。改为按固定间隔累加的截止时间 + 少量容差。
     bool should_process = true;
     int64_t decode_interval_us = decode_interval_ms_ * 1000LL;
 
     if (decode_interval_us > 0)
     {
         auto now = std::chrono::steady_clock::now();
-        auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_encode_time_).count();
-        if (elapsed_us < decode_interval_us)
+        // 容差：源帧间隔与目标间隔接近时，吸收抓帧抖动/线程调度抖动，
+        // 避免“差 1ms 就丢一帧”；取目标间隔的 1/4，保证不会超发。
+        auto tolerance = std::chrono::microseconds(std::max<int64_t>(1000, decode_interval_us / 4));
+
+        if (now + tolerance < next_process_deadline_)
         {
             should_process = false;
+        }
+        else
+        {
+            // 累加而非 now + interval，保持与源帧率长期锁相
+            next_process_deadline_ += std::chrono::microseconds(decode_interval_us);
+            // 已经落后（源帧率低于目标间隔，或长时间调度抖动）时重新对齐，
+            // 否则会在恢复时连续补帧
+            if (next_process_deadline_ <= now)
+            {
+                next_process_deadline_ = now + std::chrono::microseconds(decode_interval_us);
+            }
         }
     }
 
@@ -710,6 +734,7 @@ void StreamTask::stepCompute()
             if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_))
             {
                 frame_ready = true;
+                recordPublishedFrame();
             }
         }
     }
@@ -761,6 +786,7 @@ void StreamTask::stepCompute()
         // 编码/透传成功后通知订阅者
         if (frame_ready)
         {
+            recordPublishedFrame();
             std::shared_ptr<std::string> prev_frame;
             {
                 std::unique_lock<std::shared_mutex> frame_lock(frame_mutex_);
@@ -785,6 +811,50 @@ void StreamTask::updateHeartbeat()
 {
     auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     last_access_time_.store(now);
+}
+
+// 每次成功发布一帧（写入 SHM 或编码为 JPEG）时调用。
+// 用 1 秒滚动窗口计算速率：窗口期满时用 (本次计数 - 窗口起点计数) / 实际时长。
+void StreamTask::recordPublishedFrame()
+{
+    const auto now = std::chrono::steady_clock::now();
+    const int64_t now_ns = now.time_since_epoch().count();
+    last_publish_ns_.store(now_ns, std::memory_order_relaxed);
+    const uint64_t total = publish_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    const int64_t start_ns = publish_window_start_ns_.load(std::memory_order_relaxed);
+    if (start_ns == 0)
+    {
+        // 首个发布点：开窗，等有足够时长再结算
+        publish_window_start_ns_.store(now_ns, std::memory_order_relaxed);
+        publish_window_count_.store(total, std::memory_order_relaxed);
+        return;
+    }
+
+    constexpr int64_t WINDOW_NS = 1000000000LL; // 1s
+    const int64_t elapsed_ns = now_ns - start_ns;
+    if (elapsed_ns >= WINDOW_NS)
+    {
+        const uint64_t start_count = publish_window_count_.load(std::memory_order_relaxed);
+        publish_fps_.store(static_cast<double>(total - start_count) * 1e9 / static_cast<double>(elapsed_ns),
+                           std::memory_order_relaxed);
+        publish_window_start_ns_.store(now_ns, std::memory_order_relaxed);
+        publish_window_count_.store(total, std::memory_order_relaxed);
+    }
+}
+
+double StreamTask::getPublishFps() const
+{
+    const int64_t last_ns = last_publish_ns_.load(std::memory_order_relaxed);
+    if (last_ns == 0)
+        return 0.0;
+
+    const auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    // 长时间没有新帧（断流/重新连接中）时不要继续报旧值
+    if (now_ns - last_ns > 3000000000LL) // 3s
+        return 0.0;
+
+    return publish_fps_.load(std::memory_order_relaxed);
 }
 
 int StreamTask::calculateReconnectDelayMs() const

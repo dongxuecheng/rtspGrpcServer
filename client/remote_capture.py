@@ -946,7 +946,8 @@ class _BaseRTSPClient:
                 "heartbeat_timeout_ms": s.heartbeat_timeout_ms,
                 "keep_on_failure": s.keep_on_failure,
                 "only_key_frames": s.only_key_frames,
-                "use_shared_mem": s.use_shared_mem
+                "use_shared_mem": s.use_shared_mem,
+                "fps": getattr(s, "fps", 0.0)
             })
         return streams
 
@@ -979,6 +980,7 @@ class _BaseRTSPClient:
             "keep_on_failure": s.keep_on_failure,
             "only_key_frames": s.only_key_frames,
             "use_shared_mem": s.use_shared_mem,
+            "fps": getattr(s, "fps", 0.0),
             "server_message": resp.message
         }
 

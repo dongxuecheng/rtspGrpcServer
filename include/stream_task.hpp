@@ -70,6 +70,9 @@ public:
     int getHeartbeatTimeMs() const { return heartbeat_timeout_ms_; }
     bool onlyKeyFrames() const { return decoder_->onlyKeyFrames(); }
 
+    // 服务端真实出帧率（每秒发布的帧数）。超过 3 秒没有新帧则返回 0（视为停流）。
+    double getPublishFps() const;
+
     // 条件变量等待下一帧（零拷贝）
     bool waitForNextFrame(std::shared_ptr<std::string> &out_buffer, uint64_t &current_seq, int timeout_ms);
 
@@ -185,6 +188,11 @@ private:
     std::chrono::steady_clock::time_point first_failure_time_;
     std::chrono::steady_clock::time_point last_encode_time_;
 
+    // 抽帧（decode_interval_ms_）的下一次放行时刻。
+    // 用“按固定间隔累加”的截止时间而不是“距上次发布是否够久”，
+    // 保证与源帧率长期锁相，不会出现“每次都差几毫秒 → 白丢一整帧”。
+    std::chrono::steady_clock::time_point next_process_deadline_;
+
     // 首帧容忍相关
     std::chrono::steady_clock::time_point first_grab_attempt_time_;
     std::atomic<bool> first_frame_seen_{false};
@@ -195,6 +203,14 @@ private:
 
     std::atomic<uint64_t> frame_seq_{0};
     uint64_t last_grab_timestamp_ms_ = 0;
+
+    // 出帧率统计（1 秒滚动窗口，无锁；发布点调用 recordPublishedFrame）
+    void recordPublishedFrame();
+    std::atomic<uint64_t> publish_count_{0};
+    std::atomic<int64_t> publish_window_start_ns_{0};
+    std::atomic<uint64_t> publish_window_count_{0};
+    std::atomic<double> publish_fps_{0.0};
+    std::atomic<int64_t> last_publish_ns_{0};
 
     // 用于 CPU 路径的图像缓存，避免反复分配 cv::Mat
     cv::Mat reusable_frame_;
