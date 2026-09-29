@@ -28,7 +28,17 @@ struct alignas(64) ShmMeta
     uint32_t channels;
     uint32_t depth;
     uint32_t step;
-    uint32_t reserved;
+    uint32_t frame_flags;   // 位定义见 SHM_FRAME_FLAG_*（该帧是否花屏）
+    uint32_t pixel_format;  // 见下方 PIXEL_*（占用原结构体尾部填充区）
+};
+
+// 像素格式（与 include/pixel_format.hpp、stream_service.proto 保持一致）
+enum : uint32_t
+{
+    PIXEL_BGR = 0,
+    PIXEL_NV12 = 1,
+    PIXEL_I420 = 2,
+    PIXEL_YUYV422 = 3,
 };
 
 // 与 zero_copy_channel.hpp 中 ShmLayoutInfo 字段一致
@@ -348,6 +358,57 @@ private:
             return false;
         }
 
+        uint8_t *payload = slot + layout_.payload_offset;
+
+        // 非 BGR24 的共享内存原始帧（服务端 pixel_format=NV12/I420/YUYV422）：
+        // 布局与图像宽高不成正比（NV12/I420 的缓冲是 H*3/2 行），
+        // 本工具只用于调试取图，因此统一转成 BGR 存盘。
+        if (meta.pixel_format != PIXEL_BGR)
+        {
+            cv::Mat bgr;
+            if (meta.pixel_format == PIXEL_NV12 || meta.pixel_format == PIXEL_I420)
+            {
+                const uint64_t rows = meta.height + (meta.height + 1) / 2;
+                const uint64_t stride = meta.step > 0 ? meta.step : meta.width;
+                if (rows * stride > meta.actual_size)
+                {
+                    reason = "YUV420 buffer smaller than meta implies";
+                    return false;
+                }
+                cv::Mat yuv(static_cast<int>(rows), static_cast<int>(meta.width), CV_8UC1,
+                            payload, static_cast<size_t>(stride));
+                cv::cvtColor(yuv, bgr, meta.pixel_format == PIXEL_NV12 ? cv::COLOR_YUV2BGR_NV12
+                                                                      : cv::COLOR_YUV2BGR_I420);
+            }
+            else if (meta.pixel_format == PIXEL_YUYV422)
+            {
+                const uint64_t stride = meta.step > 0 ? meta.step : meta.width * 2;
+                if (meta.height * stride > meta.actual_size)
+                {
+                    reason = "YUYV422 buffer smaller than meta implies";
+                    return false;
+                }
+                cv::Mat yuv(static_cast<int>(meta.height), static_cast<int>(meta.width), CV_8UC2,
+                            payload, static_cast<size_t>(stride));
+                cv::cvtColor(yuv, bgr, cv::COLOR_YUV2BGR_YUYV);
+            }
+            else
+            {
+                reason = "unknown pixel_format=" + std::to_string(meta.pixel_format);
+                return false;
+            }
+
+            if (bgr.empty())
+            {
+                reason = "YUV->BGR conversion failed";
+                return false;
+            }
+            frame = bgr;
+            timestamp = meta.timestamp;
+            last_idx_ = head;
+            return true;
+        }
+
         int cv_type = CV_MAKETYPE(meta.depth, meta.channels);
         cv::Mat img(static_cast<int>(meta.height), static_cast<int>(meta.width), cv_type);
         if (img.empty())
@@ -366,7 +427,6 @@ private:
 
         size_t elem_size = img.elemSize1();                    // 单个通道字节数（与 Python 端 itemsize 对应）
         size_t expected_step = meta.width * meta.channels * elem_size;
-        uint8_t *payload = slot + layout_.payload_offset;
 
         if (meta.step > 0 && meta.step != expected_step)
         {

@@ -9,6 +9,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/frame.h>
+#include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 }
 
@@ -30,6 +31,15 @@ namespace FFHDDecoder {
         virtual int get_width() = 0;
         virtual int get_height() = 0;
         virtual AVPixelFormat get_pix_fmt() = 0;
+
+        // 辅助功能：将解码后的 AVFrame 转换为指定像素格式，写入连续的 dst_buffer。
+        //
+        // - packed 格式（AV_PIX_FMT_BGR24 / AV_PIX_FMT_YUYV422）：dst_linesize 为行字节数，
+        //   传 0 时按“宽度 × 像素字节数”紧凑排列；
+        // - planar 格式（AV_PIX_FMT_NV12 / AV_PIX_FMT_YUV420P）：忽略 dst_linesize，
+        //   一律按紧凑布局（无行末 padding）填充各平面，与共享内存约定一致。
+        virtual bool convert_to_format(AVFrame* frame, uint8_t* dst_buffer, int dst_linesize,
+                                       AVPixelFormat dst_fmt) = 0;
 
         // 辅助功能：将解码后的 AVFrame 转换为 BGR24 数据（常用于 OpenCV Mat）
         virtual bool convert_to_bgr(AVFrame* frame, uint8_t* bgr_buffer, int bgr_linesize) = 0;

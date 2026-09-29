@@ -13,6 +13,7 @@
 #include <semaphore.h>
 #include <spdlog/spdlog.h>
 #include <opencv2/opencv.hpp>
+#include "pixel_format.hpp"
 
 // 槽位数量（固定）
 constexpr int SHM_SLOT_COUNT = 3;
@@ -24,7 +25,7 @@ constexpr size_t DEFAULT_SHM_FRAME_BYTES = 3 * 1920 * 1080;
 struct alignas(64) ShmMeta
 {
     uint64_t actual_size;    // 实际数据字节数
-    uint64_t width;          // 图像宽度
+    uint64_t width;          // 图像宽度（YUV 格式下也是图像宽度，不是缓冲行数）
     uint64_t height;         // 图像高度
     uint64_t timestamp;      // 时间戳 (ms)
 
@@ -33,6 +34,11 @@ struct alignas(64) ShmMeta
     uint32_t depth;          // 位深: CV_8U=0, CV_16U=2, CV_32F=5 等
     uint32_t step;           // 行字节数 (含 padding)，用于非连续内存
     uint32_t frame_flags;    // 帧标志位（复用原 reserved 字段，布局/大小不变）
+
+    // 像素格式（PixelFormat）：0=BGR24, 1=NV12, 2=I420, 3=YUYV422。
+    // 落在原结构体的尾部填充区内，因此 sizeof(ShmMeta) 仍为 64，
+    // 所有已有字段偏移、payload 偏移、slot 大小均不变（旧客户端仍可读）。
+    uint32_t pixel_format;
 };
 
 // ShmMeta::frame_flags 的位定义（消费端读 meta 内偏移 44 处的 uint32）
@@ -45,10 +51,12 @@ static constexpr uint32_t SHM_FRAME_FLAG_CORRUPTED = 1u << 0; // 该帧解码出
 // ⚠️ ShmMeta 带 alignas(64)，因此真实布局是：
 //     offsetof(ShmFrameSlot, sequence) = 0
 //     offsetof(ShmFrameSlot, meta)     = 64   ← 不是 8（sequence 后有 56 字节填充）
-//     sizeof(ShmMeta)                  = 64   ← 不是 48
+//     sizeof(ShmMeta)                  = 64   ← 52 字节有效数据 + 12 字节尾部填充
 //     payload 偏移（SLOT_META_SIZE）    = 128  ← 不是 56/64
 //      sizeof(ShmFrameSlot)            = 128
 // 消费端（Python 客户端、tools/*）一律不要硬编码这些偏移，请使用 GetShmLayout 的返回值。
+// ShmMeta 内部字段顺序（QQQQIIIII = 4×u64 + 5×u32 = 52 字节）是消费端解析约定，见
+// client/remote_capture.py::_read_meta；新增字段只能落在尾部填充区内。
 struct alignas(64) ShmFrameSlot
 {
     std::atomic<uint64_t> sequence{0};   // 8 bytes, offset 0
@@ -61,6 +69,10 @@ static_assert(offsetof(ShmFrameSlot, sequence) == 0, "sequence 应位于槽位�
 static_assert(offsetof(ShmFrameSlot, meta) == 64, "ShmMeta 带 alignas(64)，meta 偏移应为 64");
 static_assert(sizeof(ShmMeta) == 64, "sizeof(ShmMeta) 应为 64");
 static_assert(sizeof(ShmFrameSlot) == 128, "sizeof(ShmFrameSlot) 应为 128");
+// ShmMeta 内部字段顺序是消费端（Python/tools）的解析约定：4×u64 + 5×u32 = 52 字节
+static_assert(offsetof(ShmMeta, channels) == 32, "ShmMeta 字段顺序约定：channels 应在偏移 32");
+static_assert(offsetof(ShmMeta, pixel_format) == 48,
+              "ShmMeta 字段顺序约定：pixel_format 应在偏移 48（占用原有尾部填充区）");
 
 // 共享内存布局（运行时计算）：
 //   [slot 0 metadata (sizeof(ShmFrameSlot)=128B)] [slot 0 payload (max_frame_bytes)] [padding to 64]
@@ -227,61 +239,86 @@ public:
     ZeroCopyChannel(ZeroCopyChannel&&) = delete;
     ZeroCopyChannel& operator=(ZeroCopyChannel&&) = delete;
 
-    bool write_frame_mat(const cv::Mat& frame, uint64_t timestamp, uint32_t frame_flags = 0)
+    bool write_frame_mat(const cv::Mat& frame, uint64_t timestamp, uint32_t frame_flags = 0,
+                         uint32_t pixel_format = static_cast<uint32_t>(PixelFormat::BGR))
     {
-        std::unique_lock<std::mutex> lock(cleanup_mutex_);
-        if (cleaned_.load() || !base_ || frame.empty())
+        if (frame.empty())
         {
             return false;
         }
 
-        // 1. 确保数据连续
+        // 确保数据连续
         cv::Mat continuous_frame = frame;
         if (!frame.isContinuous())
         {
             continuous_frame = frame.clone();
         }
 
-        // 2. 计算数据大小
-        const size_t data_size = continuous_frame.total() * continuous_frame.elemSize();
-        if (data_size > max_frame_bytes_)
+        return write_frame_raw(continuous_frame.data,
+                               continuous_frame.total() * continuous_frame.elemSize(),
+                               static_cast<uint64_t>(continuous_frame.cols),
+                               static_cast<uint64_t>(continuous_frame.rows),
+                               static_cast<uint32_t>(continuous_frame.channels()),
+                               static_cast<uint32_t>(continuous_frame.depth()),
+                               static_cast<uint32_t>(continuous_frame.step[0]),
+                               pixel_format, timestamp, frame_flags);
+    }
+
+    // 写入一帧原始缓冲：显式给出**图像宽高**与像素格式，行字节数由 step 指定。
+    //
+    // 适用于布局与图像宽高不成正比的格式（YUV）：例如 NV12 的缓冲是 H*3/2 行，
+    // 但 meta.width/height 仍然写图像宽高（W/H），消费端依靠 pixel_format 解释布局。
+    // YUV 缓冲约定紧密排列（无行末 padding），此时 step 即一行的自然字节数。
+    bool write_frame_raw(const uint8_t *src_data, size_t size,
+                         uint64_t width, uint64_t height,
+                         uint32_t channels, uint32_t depth, uint32_t step,
+                         uint32_t pixel_format,
+                         uint64_t timestamp, uint32_t frame_flags = 0)
+    {
+        std::unique_lock<std::mutex> lock(cleanup_mutex_);
+        if (cleaned_.load() || !base_ || !src_data || size == 0)
+        {
+            return false;
+        }
+        if (size > max_frame_bytes_)
         {
             spdlog::warn("[ZeroCopyChannel] Frame size {} exceeds max_frame_bytes {} for stream {}",
-                         data_size, max_frame_bytes_, stream_id_);
+                         size, max_frame_bytes_, stream_id_);
             return false;
         }
 
-        // 3. 获取槽位指针
+        // 1. 获取槽位指针
         uint64_t count = write_count_++;
         size_t idx = count % SHM_SLOT_COUNT;
         uint8_t *slot_base = base_ + idx * slot_size_;
         ShmFrameSlot *slot = reinterpret_cast<ShmFrameSlot *>(slot_base);
 
-        // 4. 标记开始写入 (sequence 奇数 = 写入中)
+        // 2. 标记开始写入 (sequence 奇数 = 写入中)
         slot->sequence.fetch_add(1, std::memory_order_release);
 
-        // 5. 写入元数据
-        slot->meta.actual_size = data_size;
-        slot->meta.width = frame.cols;
-        slot->meta.height = frame.rows;
+        // 3. 写入元数据
+        slot->meta.actual_size = size;
+        slot->meta.width = width;
+        slot->meta.height = height;
         slot->meta.timestamp = timestamp;
-        slot->meta.channels = frame.channels();
-        slot->meta.depth = frame.depth();
-        slot->meta.step = static_cast<uint32_t>(continuous_frame.step[0]);
+        slot->meta.channels = channels;
+        slot->meta.depth = depth;
+        slot->meta.step = step;
         slot->meta.frame_flags = frame_flags;
+        slot->meta.pixel_format = pixel_format;
 
-        // 6. 拷贝帧数据到 payload 区域（slot 元数据之后）
+        // 4. 拷贝帧数据到 payload 区域（slot 元数据之后）
         uint8_t *payload_ptr = slot_base + payload_offset_;
-        std::memcpy(payload_ptr, continuous_frame.data, data_size);
+        std::memcpy(payload_ptr, src_data, size);
 
-        // 7. 标记写入完成 (sequence 偶数 = 就绪)
+        // 5. 标记写入完成 (sequence 偶数 = 就绪)
         slot->sequence.fetch_add(1, std::memory_order_release);
 
-        // 8. 更新全局 head_idx
+        // 6. 更新全局 head_idx
         std::atomic<uint64_t> *head = reinterpret_cast<std::atomic<uint64_t> *>(base_ + head_idx_offset_);
         head->store(count, std::memory_order_release);
 
-        // 9. 通知等待的客户端
+        // 7. 通知等待的客户端
         if (notify_sem_)
         {
             if (sem_post(notify_sem_) != 0)
@@ -293,49 +330,15 @@ public:
         return true;
     }
 
-    // 写入原始数据（无 OpenCV Mat）
+    // 【已弃用】写入未知格式的原始数据。保留仅为兼容旧调用方，
+    // 新代码请用 write_frame_raw()（可显式声明像素格式与图像宽高）。
     void write_frame(const uint8_t *src_data, uint64_t size, uint64_t w, uint64_t h, uint64_t ts,
                      uint32_t frame_flags = 0)
     {
-        std::unique_lock<std::mutex> lock(cleanup_mutex_);
-        if (cleaned_.load() || !base_ || size > max_frame_bytes_)
-            return;
-
-        uint64_t count = write_count_++;
-        size_t idx = count % SHM_SLOT_COUNT;
-        uint8_t *slot_base = base_ + idx * slot_size_;
-        ShmFrameSlot *slot = reinterpret_cast<ShmFrameSlot *>(slot_base);
-
-        // 1. 标记开始写入
-        slot->sequence.fetch_add(1, std::memory_order_release);
-
-        // 2. 写入元数据
-        slot->meta = {};
-        slot->meta.actual_size = size;
-        slot->meta.width = w;
-        slot->meta.height = h;
-        slot->meta.timestamp = ts;
-        slot->meta.frame_flags = frame_flags;
-
-        // 3. 拷贝实际数据
-        uint8_t *payload_ptr = slot_base + payload_offset_;
-        std::memcpy(payload_ptr, src_data, size);
-
-        // 4. 标记写入完成
-        slot->sequence.fetch_add(1, std::memory_order_release);
-
-        // 5. 更新索引
-        std::atomic<uint64_t> *head = reinterpret_cast<std::atomic<uint64_t> *>(base_ + head_idx_offset_);
-        head->store(count, std::memory_order_release);
-
-        // 6. 通知等待的客户端
-        if (notify_sem_)
-        {
-            if (sem_post(notify_sem_) != 0)
-            {
-                spdlog::debug("[ZeroCopyChannel] sem_post failed for {} (errno={})", stream_id_, errno);
-            }
-        }
+        write_frame_raw(src_data, static_cast<size_t>(size), w, h,
+                        pixelFormatChannels(static_cast<uint32_t>(PixelFormat::BGR)),
+                        static_cast<uint32_t>(CV_8U), static_cast<uint32_t>(w * 3),
+                        static_cast<uint32_t>(PixelFormat::BGR), ts, frame_flags);
     }
 
     void cleanup()

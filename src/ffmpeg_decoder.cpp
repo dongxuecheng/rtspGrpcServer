@@ -1,5 +1,6 @@
 #include "ffmpeg_decoder.hpp"
 #include <iostream>
+#include <spdlog/spdlog.h>
 #include "simple-logger.hpp"
 
 using namespace std;
@@ -207,10 +208,11 @@ namespace FFHDDecoder
         int get_height() override { return m_ctx ? m_ctx->height : 0; }
         AVPixelFormat get_pix_fmt() override { return m_ctx ? m_ctx->pix_fmt : AV_PIX_FMT_NONE; }
 
-        // 辅助工具：将解码出的 YUV 转换为 BGR (方便送给 OpenCV 或显示)
-        bool convert_to_bgr(AVFrame *frame, uint8_t *bgr_buffer, int bgr_linesize) override
+        // 辅助工具：将解码出的帧转换为指定像素格式（BGR24 / NV12 / I420 / YUYV422）
+        bool convert_to_format(AVFrame *frame, uint8_t *dst_buffer, int dst_linesize,
+                               AVPixelFormat dst_fmt) override
         {
-            if (!frame || !bgr_buffer)
+            if (!frame || !dst_buffer)
                 return false;
 
             if (!frame->data[0] || frame->width <= 0 || frame->height <= 0)
@@ -238,9 +240,11 @@ namespace FFHDDecoder
             }
 
             // 2. 创建或获取复用的 swscale 上下文
+            //    sws_getCachedContext 会校验目标格式：目标格式变化时会自动重建上下文，
+            //    因此同一路流切换 BGR/YUV 不需要额外缓存。
             m_sws_ctx = sws_getCachedContext(m_sws_ctx,
                                              frame->width, frame->height, src_fmt,
-                                             frame->width, frame->height, AV_PIX_FMT_BGR24,
+                                             frame->width, frame->height, dst_fmt,
                                              SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
 
             if (!m_sws_ctx)
@@ -264,12 +268,32 @@ namespace FFHDDecoder
             }
 
             // 4. 执行格式转换
-            uint8_t *dest_data[4] = {bgr_buffer, nullptr, nullptr, nullptr};
-            int dest_linesize[4] = {bgr_linesize, 0, 0, 0};
+            //    packed 格式用调用方给的行字节数；planar 格式（NV12/I420）按紧凑布局
+            //    计算各平面指针与 stride（对齐为 1，不引入任何行末 padding）。
+            uint8_t *dest_data[4] = {nullptr, nullptr, nullptr, nullptr};
+            int dest_linesize[4] = {0, 0, 0, 0};
+            if (dst_fmt == AV_PIX_FMT_BGR24 || dst_fmt == AV_PIX_FMT_YUYV422)
+            {
+                const int bytes_per_pixel = (dst_fmt == AV_PIX_FMT_BGR24) ? 3 : 2;
+                dest_data[0] = dst_buffer;
+                dest_linesize[0] = dst_linesize > 0 ? dst_linesize : frame->width * bytes_per_pixel;
+            }
+            else if (av_image_fill_arrays(dest_data, dest_linesize, dst_buffer, dst_fmt,
+                                          frame->width, frame->height, 1) < 0)
+            {
+                spdlog::error("av_image_fill_arrays failed for dst format {}", static_cast<int>(dst_fmt));
+                return false;
+            }
 
             int ret = sws_scale(m_sws_ctx, frame->data, frame->linesize, 0, frame->height,
                                 dest_data, dest_linesize);
             return ret > 0;
+        }
+
+        // 便捷包装：转换为 BGR24（OpenCV Mat 默认布局）
+        bool convert_to_bgr(AVFrame *frame, uint8_t *bgr_buffer, int bgr_linesize) override
+        {
+            return convert_to_format(frame, bgr_buffer, bgr_linesize, AV_PIX_FMT_BGR24);
         }
 
     private:

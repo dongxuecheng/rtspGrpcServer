@@ -33,6 +33,11 @@ from remote_capture import (
     DECODER_CPU_FFMPEG,
     DECODER_HIK_SDK,
     DECODER_NAMES,
+    PIXEL_NV12,
+    PIXEL_I420,
+    PIXEL_YUYV422,
+    PIXEL_FORMAT_NAMES,
+    split_yuv_planes,
     STATUS_CONNECTING,
     STATUS_CONNECTED,
     STATUS_DISCONNECTED,
@@ -287,7 +292,6 @@ def example_shared_memory(blocking: bool = True,
 
 
 # ==================== 示例 5: cv2.VideoCapture 风格 SHM 接口 ====================
-
 def example_shm_capture_style(duration_sec: int = 10):
     """使用 RTSPClient 模拟 cv2.VideoCapture 风格的单流 SHM API"""
     print("\n" + "=" * 60)
@@ -825,6 +829,7 @@ def print_usage():
   11 - 持续保存图片到指定文件夹（按 Ctrl+C 停止）
   12 - 海康 SDK 直接抓图
   13 - RTSP <-> 海康 SDK 动态切换
+  14 - SHM YUV 原始帧（NV12 / I420 / YUYV422）
   all - 顺序运行所有示例（部分示例耗时较长）
 
 环境变量:
@@ -837,6 +842,68 @@ def print_usage():
   HIK_PASSWORD - 海康密码
   HIK_CHANNEL - 海康通道号，默认 1
 """)
+
+
+# ==================== 示例 14: SHM YUV 原始帧 ====================
+
+def example_yuv_pixel_format(duration_sec: int = 5):
+    """通过 SHM 直接读取 YUV 原始帧（NV12 / I420 / YUYV422）
+
+    场景：下游（如 Ascend DVPP）直接吃 YUV，不希望服务端先转 BGR、客户端再转回去。
+    指定 pixel_format 后，服务端用 sws_scale 直出目标格式；GPU 解码请求 NV12 时
+    更是让 NVDEC 直出 NV12（跳过色彩核），客户端拿到零转换的原始帧。
+
+    注意：pixel_format 只在 use_shared_mem=True 时生效（gRPC 通道始终返回 JPEG）。
+    """
+    print("\n" + "=" * 60)
+    print("示例 14: SHM YUV 原始帧 (NV12 / I420 / YUYV422)")
+    print("=" * 60)
+
+    for pix_fmt in (PIXEL_NV12, PIXEL_I420, PIXEL_YUYV422):
+        print(f"\n--- {PIXEL_FORMAT_NAMES[pix_fmt]} ---")
+        with RTSPClient(SERVER) as client:
+            stream_id = client.start_stream(
+                RTSP_URL,
+                decoder_type=DECODER_CPU_FFMPEG,
+                use_shared_mem=True,
+                pixel_format=pix_fmt,
+            )
+            if not stream_id:
+                print("启动流失败")
+                continue
+            if not wait_for_connection(client, stream_id):
+                client.stop_stream(stream_id)
+                continue
+
+            info = client.check_stream(stream_id) or {}
+            print(f"服务端回报像素格式: {info.get('pixel_format_name')} "
+                  f"(SHM={info.get('use_shared_mem')})")
+
+            ok_count = 0
+            start = time.time()
+            while time.time() - start < duration_sec:
+                ts, frame, corrupted = client.read_ex(stream_id, blocking=True, timeout_ms=1000)
+                if ts == -1 or frame is None:
+                    continue
+                ok_count += 1
+                if ok_count == 1:
+                    print(f"  帧形状: {frame.shape}, dtype={frame.dtype}, 花屏={corrupted}")
+                    # YUV 帧可直接拆平面（纯视图切片，零拷贝）
+                    planes = split_yuv_planes(frame, pix_fmt)
+                    print("  平面: " + ", ".join(f"{k}{v.shape}" for k, v in planes.items()))
+                    # 验证数据可用：转回 BGR 看看（业务上下游设备会直接吃 YUV）
+                    if pix_fmt == PIXEL_NV12:
+                        bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_NV12)
+                    elif pix_fmt == PIXEL_I420:
+                        bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+                    else:
+                        h, w = frame.shape
+                        bgr = cv2.cvtColor(frame.reshape(h, w // 2, 2), cv2.COLOR_YUV2BGR_YUYV)
+                    print(f"  转 BGR 校验: {bgr.shape}, 均值={bgr.mean():.1f}")
+
+            elapsed = time.time() - start
+            print(f"  读取 {ok_count} 帧 / {elapsed:.2f}s = {ok_count / max(elapsed, 1e-6):.1f} FPS")
+            client.stop_stream(stream_id)
 
 
 EXAMPLES = {
@@ -853,6 +920,7 @@ EXAMPLES = {
     "11": example_save_images,
     "12": example_hik_sdk,
     "13": example_switch_rtsp_hik,
+    "14": example_yuv_pixel_format,
 }
 
 

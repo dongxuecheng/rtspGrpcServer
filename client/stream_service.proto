@@ -17,6 +17,16 @@ enum StreamStatus {
     STATUS_NOT_FOUND = 3;     // 不存在
 }
 
+// 共享内存原始帧的像素格式（仅 use_shared_mem = true 时生效）
+// gRPC 通道始终返回 JPEG，与本字段无关。
+// 数值需与 C++ 端 include/interfaces.hpp 的 PixelFormat 保持一致。
+enum PixelFormat {
+    PIXEL_BGR = 0;        // 默认：BGR24 交错（OpenCV 原生，兼容旧客户端）
+    PIXEL_NV12 = 1;       // YUV420SP：Y 平面 + 交错 UV 平面（Ascend DVPP 常用）
+    PIXEL_I420 = 2;       // YUV420P：Y / U / V 三个平面
+    PIXEL_YUYV422 = 3;    // YUYV 交错（packed 4:2:2）
+}
+
 service RTSPStreamService {
     rpc StartStream (StartRequest) returns (StartResponse);
     rpc StopStream (StopRequest) returns (StopResponse);
@@ -37,6 +47,9 @@ message StartRequest {
     bool keep_on_failure = 6;        // 打开失败时是否保留任务，默认 false（即自动删除）
     bool use_shared_mem = 7; // 是否写入共享内存
     bool only_key_frames = 8; // 是否只解码关键帧
+    // 共享内存原始帧的像素格式（仅 use_shared_mem = true 时生效）
+    // 默认 PIXEL_BGR 表示保持原有 BGR24 行为，兼容旧客户端。
+    PixelFormat pixel_format = 9;
 }
 
 message StartResponse {
@@ -94,6 +107,7 @@ message StreamInfo {
                                   // 持续变大=接收缓冲在堆积（越播越滞后），0 表示跟得上源
     uint64 corrupted_frames = 14; // 累计花屏帧数（解码器自报：缺参考帧/错误掩盖/码流非法）
     double glitch_ratio = 15;     // 最近 1 秒内花屏帧占比 0~1（>0 说明正在花屏）
+    PixelFormat pixel_format = 16; // 共享内存原始帧的像素格式（见 StartRequest.pixel_format）
 }
 
 message CheckRequest {

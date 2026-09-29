@@ -40,6 +40,12 @@ __all__ = [
     "DECODER_GPU_NVCUVID",
     "DECODER_HIK_SDK",
     "DECODER_NAMES",
+    "PIXEL_BGR",
+    "PIXEL_NV12",
+    "PIXEL_I420",
+    "PIXEL_YUYV422",
+    "PIXEL_FORMAT_NAMES",
+    "split_yuv_planes",
     "STATUS_CONNECTING",
     "STATUS_CONNECTED",
     "STATUS_DISCONNECTED",
@@ -57,6 +63,20 @@ DECODER_NAMES = {
     DECODER_CPU_FFMPEG: "CPU (FFmpeg)",
     DECODER_GPU_NVCUVID: "GPU (NVCUVID)",
     DECODER_HIK_SDK: "HIK SDK"
+}
+
+# 共享内存原始帧的像素格式（仅 use_shared_mem=True 时生效；gRPC 通道恒为 JPEG）。
+# 使用方式：client.start_stream(..., use_shared_mem=True, pixel_format=PIXEL_NV12)
+PIXEL_BGR = stream_service_pb2.PIXEL_BGR            # 默认，BGR24（OpenCV 原生）
+PIXEL_NV12 = stream_service_pb2.PIXEL_NV12          # YUV420SP，Ascend DVPP 常用
+PIXEL_I420 = stream_service_pb2.PIXEL_I420          # YUV420P
+PIXEL_YUYV422 = stream_service_pb2.PIXEL_YUYV422    # packed 4:2:2
+
+PIXEL_FORMAT_NAMES = {
+    PIXEL_BGR: "BGR24",
+    PIXEL_NV12: "NV12(YUV420SP)",
+    PIXEL_I420: "I420(YUV420P)",
+    PIXEL_YUYV422: "YUYV422",
 }
 
 STATUS_CONNECTING = stream_service_pb2.STATUS_CONNECTING
@@ -178,7 +198,7 @@ class _NotifySemaphore:
 # 对应 C++ 的 ShmFrameSlot：
 #   sequence (8B)  @ 0
 #   对齐填充        [8, 64)   ← 因为 ShmMeta 带 alignas(64)
-#   ShmMeta        @ 64，sizeof(ShmMeta) = 64（48B 数据 + 16B 尾部填充）
+#   ShmMeta        @ 64，sizeof(ShmMeta) = 64（52B 数据 + 12B 尾部填充）
 #   payload        @ 128
 # 注意：不要按“注释/直觉”改成 8/48/56，务必以 GetShmLayout 返回值为准。
 SHM_SLOT_COUNT = 3                                             # constexpr int SHM_SLOT_COUNT
@@ -193,6 +213,10 @@ SHM_FALLBACK_MAX_FRAME_BYTES = 3 * 1920 * 1080
 
 # ShmMeta.frame_flags 的位定义（与 C++ 端 zero_copy_channel.hpp 保持一致）
 SHM_FLAG_CORRUPTED = 1 << 0   # 该帧解码出错/花屏（缺参考帧、错误掩盖、码流非法）
+
+# ShmMeta 内部字段（struct 格式 "QQQQIIIII"，共 52 字节）在 meta 内的偏移：
+#   actual_size@0 width@8 height@16 timestamp@24
+#   channels@32 depth@36 step@40 frame_flags@44 pixel_format@48
 
 # 服务端“运行中扩容”的探测参数：
 # 帧变大（分辨率切换）时服务端会 unlink 旧 SHM 并创建新对象（新 inode），
@@ -263,6 +287,50 @@ def derive_shm_layout_from_size(file_size: int,
     }
 
 
+def split_yuv_planes(frame: np.ndarray, pixel_format: int) -> dict:
+    """把 YUV 原始帧按平面拆开（纯切片视图，不拷贝数据）。
+
+    服务端写入共享内存的 YUV 缓冲是**紧密排列**的（无行末 padding），因此可以直接
+    按扁平缓冲切出各平面（返回的都是视图，不拷贝数据）：
+
+        NV12    y 平面 W*H 字节，其后是 W*ceil(H/2) 字节的交错 UV
+        I420    y 平面 W*H 字节，其后是 (W/2)*(H/2) 的 U，再是 (W/2)*(H/2) 的 V
+        YUYV422 每 4 字节为 [Y0,U,Y1,V]
+
+    注意：I420 的色度平面宽度是 W/2，无法按“整行”切分，所以这里统一在扁平缓冲上切片。
+
+    :param frame: read()/read_ex() 返回的 YUV 帧（2-D uint8 数组）
+    :param pixel_format: PIXEL_NV12 / PIXEL_I420 / PIXEL_YUYV422
+    :return: 字典形式的平面；传入 BGR 或形状不匹配时抛出 ValueError
+    """
+    if frame is None or frame.ndim != 2:
+        raise ValueError("frame 必须是二维 YUV 缓冲")
+
+    rows, cols = frame.shape
+    if pixel_format in (PIXEL_NV12, PIXEL_I420):
+        if rows % 3 != 0:
+            raise ValueError(f"YUV420 缓冲行数 {rows} 不是 3 的倍数，无法推导平面")
+        h = rows * 2 // 3
+        w = cols
+        flat = frame.reshape(-1)
+        y = flat[:w * h].reshape(h, w)
+        if pixel_format == PIXEL_NV12:
+            chroma_h = (h + 1) // 2
+            return {"y": y, "uv": flat[w * h:w * h + w * chroma_h].reshape(chroma_h, w)}
+        cw, ch = (w + 1) // 2, (h + 1) // 2
+        base = w * h
+        u = flat[base:base + cw * ch].reshape(ch, cw)
+        v = flat[base + cw * ch:base + 2 * cw * ch].reshape(ch, cw)
+        return {"y": y, "u": u, "v": v}
+
+    if pixel_format == PIXEL_YUYV422:
+        if cols % 2 != 0:
+            raise ValueError(f"YUYV422 行字节数 {cols} 不是偶数")
+        return {"yuyv": frame}
+
+    raise ValueError(f"不支持的 YUV 像素格式: {pixel_format}")
+
+
 class _ShmReader:
     """共享内存帧读取器（内部使用）"""
 
@@ -313,6 +381,8 @@ class _ShmReader:
         self._polling_mode_logged = False
         # 最近读到的这一帧是否花屏（由 meta.frame_flags 解析，逐帧更新）
         self.last_frame_corrupted = False
+        # 最近读到的这一帧的原始元数据（含 pix_fmt/w/h/step/ch/depth/flags）
+        self.last_frame_meta: Optional[dict] = None
 
     def _apply_layout(self, layout: dict) -> None:
         """应用布局中的动态部分"""
@@ -402,14 +472,21 @@ class _ShmReader:
         return struct.unpack("Q", self._shm_view[offset:end])[0]
 
     def _read_meta(self, slot_offset: int) -> Optional[dict]:
-        """修改此处的切片大小以配合 struct.unpack"""
+        """读取 ShmMeta。
+
+        ShmMeta 布局（与 C++ 端 zero_copy_channel.hpp 一致）：
+            QQQQIIIII = 4×u64(actual_size/width/height/timestamp)
+                        + 5×u32(channels/depth/step/frame_flags/pixel_format) = 52 字节
+        第 9 个 u32（pixel_format）落在原结构体尾部填充区内，
+        旧服务端从不写它（内存初始为 0），因此读到的就是 PIXEL_BGR，天然兼容。
+        """
         start = slot_offset + self.META_OFFSET
-        
-        # 【关键修改】：不管 C++ 填充（Padding）了多少，
-        # 我们只读取 struct 解包需要的、没有填充的 48 字节数据
-        unpack_format = "QQQQIIII"
-        unpack_size = struct.calcsize(unpack_format)  # 48 字节
-        
+
+        # 【关键】不管 C++ 填充（Padding）了多少，
+        # 我们只读取 struct 解包需要的、没有填充的 52 字节数据
+        unpack_format = "QQQQIIIII"
+        unpack_size = struct.calcsize(unpack_format)  # 52 字节
+
         end = start + unpack_size
         if end > len(self._shm_view):
             return None
@@ -419,10 +496,49 @@ class _ShmReader:
             'size': f[0], 'w': f[1], 'h': f[2], 'ts': f[3],
             'ch': f[4], 'depth': f[5], 'step': f[6],
             # 第 8 个 uint32 是帧标志位（帧花屏等），由服务端 ShmMeta.frame_flags 写入
-            'flags': f[7], '_rsv': f[7]
+            'flags': f[7], '_rsv': f[7],
+            # 第 9 个 uint32 是像素格式（PixelFormat），旧服务端恒为 0 = BGR24
+            'pix_fmt': f[8],
         }
 
+    def _rebuild_yuv_frame(self, raw_data, meta: dict) -> Optional[np.ndarray]:
+        """按 YUV 格式重建原始帧。
+
+        返回二维 uint8 数组（行 = 一行字节）：
+            NV12/I420: (H*3/2, step)，YUYV422: (H, step)
+        meta['width']/['height'] 始终是**图像**宽高，与行数不一定相等。
+        用 split_yuv_planes() 可以直接拆出各平面。
+        """
+        w, h = int(meta['w']), int(meta['h'])
+        step = int(meta['step'])
+        pix_fmt = int(meta.get('pix_fmt', PIXEL_BGR))
+
+        if pix_fmt in (PIXEL_NV12, PIXEL_I420):
+            rows = h + (h + 1) // 2
+            stride = step if step > 0 else w
+        elif pix_fmt == PIXEL_YUYV422:
+            rows = h
+            stride = step if step > 0 else w * 2
+        else:
+            logger.error(f"[_ShmReader] 未知像素格式 {pix_fmt}，无法重建 YUV 帧")
+            return None
+
+        arr = np.frombuffer(raw_data, dtype=np.uint8)
+        need = rows * stride
+        if arr.size < need:
+            logger.error(
+                f"[_ShmReader] YUV 帧数据不足：需要 {need} 字节，实际 {arr.size} "
+                f"({PIXEL_FORMAT_NAMES.get(pix_fmt, pix_fmt)} {w}x{h} step={stride})"
+            )
+            return None
+        # 拷贝出来，避免与后续写入的帧共享同一块 mmap（与 BGR 路径行为一致）
+        return arr[:need].reshape((rows, stride)).copy()
+
     def _rebuild_frame(self, raw_data, meta: dict) -> Optional[np.ndarray]:
+        pix_fmt = int(meta.get('pix_fmt', PIXEL_BGR))
+        if pix_fmt != PIXEL_BGR:
+            return self._rebuild_yuv_frame(raw_data, meta)
+
         w, h, c = meta['w'], meta['h'], meta['ch']
         depth, step = meta['depth'], meta['step']
         dtype = CV_DEPTH_TO_NUMPY.get(depth, np.uint8)
@@ -501,6 +617,7 @@ class _ShmReader:
             if img is None:
                 return None, 0, 0
             self._last_idx = latest
+            self.last_frame_meta = meta
             return img, meta['ts'], int(meta.get('flags', 0))
         except Exception as e:
             logger.debug(f"retrieve error: {e}")
@@ -836,7 +953,15 @@ class _BaseRTSPClient:
                      gpu_id: int = 0,
                      keep_on_failure: bool = False,
                      use_shared_mem: bool = False,
-                     only_key_frames: bool = False) -> Optional[str]:
+                     only_key_frames: bool = False,
+                     pixel_format: int = PIXEL_BGR) -> Optional[str]:
+        """启动流。
+
+        :param pixel_format: 共享内存原始帧的像素格式（PIXEL_BGR/PIXEL_NV12/PIXEL_I420/
+            PIXEL_YUYV422）。仅在 use_shared_mem=True 时生效；未开启 SHM 时服务端忽略该参数
+            （gRPC 通道始终返回 JPEG）。服务端会在首帧解码后就按该格式出帧，
+            客户端用 split_yuv_planes() 可把 YUV 帧拆成各平面。
+        """
         if not self._ensure_stub():
             logger.error("未连接到服务器")
             return None
@@ -870,7 +995,8 @@ class _BaseRTSPClient:
                 gpu_id=gpu_id,
                 keep_on_failure=keep_on_failure,
                 use_shared_mem=use_shared_mem,
-                only_key_frames=only_key_frames
+                only_key_frames=only_key_frames,
+                pixel_format=pixel_format
             )
             resp = self._stub.StartStream(req, timeout=10)
 
@@ -954,6 +1080,8 @@ class _BaseRTSPClient:
                 "keep_on_failure": s.keep_on_failure,
                 "only_key_frames": s.only_key_frames,
                 "use_shared_mem": s.use_shared_mem,
+                "pixel_format": getattr(s, "pixel_format", PIXEL_BGR),
+                "pixel_format_name": PIXEL_FORMAT_NAMES.get(getattr(s, "pixel_format", PIXEL_BGR), "BGR24"),
                 "fps": getattr(s, "fps", 0.0),
                 "media_lag_ms": getattr(s, "media_lag_ms", 0),
                 "corrupted_frames": getattr(s, "corrupted_frames", 0),
@@ -990,6 +1118,8 @@ class _BaseRTSPClient:
             "keep_on_failure": s.keep_on_failure,
             "only_key_frames": s.only_key_frames,
             "use_shared_mem": s.use_shared_mem,
+            "pixel_format": getattr(s, "pixel_format", PIXEL_BGR),
+            "pixel_format_name": PIXEL_FORMAT_NAMES.get(getattr(s, "pixel_format", PIXEL_BGR), "BGR24"),
             "fps": getattr(s, "fps", 0.0),
             "media_lag_ms": getattr(s, "media_lag_ms", 0),
             "corrupted_frames": getattr(s, "corrupted_frames", 0),
@@ -1089,7 +1219,8 @@ class RTSPClient(_BaseRTSPClient):
                      gpu_id: int = 0,
                      keep_on_failure: bool = False,
                      use_shared_mem: bool = False,
-                     only_key_frames: bool = False) -> Optional[str]:
+                     only_key_frames: bool = False,
+                     pixel_format: int = PIXEL_BGR) -> Optional[str]:
         """启动流并缓存启动参数，用于服务端重启后的自动恢复"""
         stream_id = super().start_stream(
             rtsp_url=rtsp_url,
@@ -1099,7 +1230,8 @@ class RTSPClient(_BaseRTSPClient):
             gpu_id=gpu_id,
             keep_on_failure=keep_on_failure,
             use_shared_mem=use_shared_mem,
-            only_key_frames=only_key_frames
+            only_key_frames=only_key_frames,
+            pixel_format=pixel_format
         )
         if stream_id:
             self._stream_params[stream_id] = {
@@ -1111,6 +1243,7 @@ class RTSPClient(_BaseRTSPClient):
                 "keep_on_failure": keep_on_failure,
                 "use_shared_mem": use_shared_mem,
                 "only_key_frames": only_key_frames,
+                "pixel_format": pixel_format,
             }
             self._stream_id_map[stream_id] = stream_id
         return stream_id
@@ -1313,6 +1446,21 @@ class RTSPClient(_BaseRTSPClient):
         uses = info is not None and info.get("use_shared_mem", False)
         self._stream_modes[stream_id] = uses
         return uses
+
+    def get_last_frame_meta(self, stream_id: str) -> Optional[dict]:
+        """返回**最近一次 read() 读到的 SHM 帧**的原始元数据。
+
+        键：size/w/h/ts/ch/depth/step/flags/pix_fmt。
+        gRPC JPEG 模式或尚未读到过 SHM 帧时返回 None。
+        用途：判断当前帧的实际像素格式（pix_fmt），据此调用 split_yuv_planes()
+        拆平面或转换为 BGR（见 web/server.py）。
+        """
+        current_id = self._stream_id_map.get(stream_id, stream_id)
+        for sid in (current_id, stream_id):
+            reader = self._shm_readers.get(sid)
+            if reader is not None and reader.last_frame_meta is not None:
+                return reader.last_frame_meta
+        return None
 
     def read(self, stream_id: str, blocking: bool = False, timeout_ms: Optional[float] = None) -> Tuple[int, Optional[np.ndarray]]:
         """

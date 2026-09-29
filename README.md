@@ -119,6 +119,7 @@ docker build --no-cache -t grpc_rtsp_server .
 | keep_on_failure | bool | 打开失败时是否保留任务 |
 | use_shared_mem | bool | 是否同时写入 POSIX 共享内存 |
 | only_key_frames | bool | 是否只解码/抓取关键帧 |
+| pixel_format | PixelFormat | 共享内存原始帧的像素格式（仅 `use_shared_mem=true` 时生效，见下方「像素格式」） |
 
 
 **响应：**
@@ -479,6 +480,44 @@ with RemoteCapture('127.0.0.1:50051') as client:
     client.stop_stream(stream_id)
 ```
 
+
+## 像素格式（BGR / YUV）
+
+共享内存通道默认给的是 **BGR24**（OpenCV 原生）。如果下游只要 YUV（例如 **Ascend DVPP 直接吃 NV12**），
+可以给流指定 `pixel_format`，让服务端**直接产出 YUV**，客户端就不必再做一次色彩转换：
+
+| 值 | 枚举 | 内存布局（一律紧密排列，无行末 padding） | 每帧字节数 |
+|----|------|------------------------------------------|------------|
+| 0 | `PIXEL_BGR` | H 行 × W 像素 × 3 通道（B,G,R 交错）——默认，兼容旧客户端 | `W*H*3` |
+| 1 | `PIXEL_NV12` | Y 平面后紧跟交错 UV【YUV420SP】，Ascend DVPP 常用 | `W*H*3/2` |
+| 2 | `PIXEL_I420` | Y / U / V 三个平面【YUV420P】 | `W*H*3/2` |
+| 3 | `PIXEL_YUYV422` | 每 2 像素 4 字节 `[Y0,U,Y1,V]`（packed 4:2:2） | `W*H*2` |
+
+要点：
+
+- **只对 SHM 生效**：gRPC 通道始终返回 JPEG，`pixel_format` 在 `use_shared_mem=false` 时会被忽略（服务端会打日志）。
+- **在 `StartStream` 时固定**：整路流一个格式；改格式需要重启流。`StreamInfo.pixel_format` 会回报当前值。
+- **不经过 BGR 中转**：CPU 解码用 `sws_scale` 直出目标格式；GPU 解码请求 NV12 时让 NVDEC 直出 NV12
+  （跳过 NV12→BGR 色彩核）。海康抓图等只能拿到 BGR 的解码器会走回退转换。
+- **消费端解析**：`ShmMeta.pixel_format`（u32，位于原结构体尾部填充区，`sizeof(ShmMeta)` 仍为 64），
+  `meta.width/height` 始终是**图像**宽高（NV12/I420 的缓冲行数是 `H*3/2`，与 `height` 不等），`meta.step` 为行字节数。
+- 旧版服务端不会写该字段（恒为 0），因此旧客户端/新客户端都保持兼容。
+
+```python
+from remote_capture import RTSPClient, PIXEL_NV12, split_yuv_planes
+
+client = RTSPClient("127.0.0.1:50051")
+client.connect()
+stream_id = client.start_stream(RTSP_URL, use_shared_mem=True, pixel_format=PIXEL_NV12)
+
+ts, nv12, corrupted = client.read_ex(stream_id, blocking=True, timeout_ms=2000)
+# nv12 形状 (H*3//2, W)，uint8；直接可交给 Ascend DVPP
+planes = split_yuv_planes(nv12, PIXEL_NV12)
+y, uv = planes["y"], planes["uv"]          # y:(H,W)  uv:(H//2,W) —— 纯视图切片，不拷贝
+```
+
+> 如需真正的 RGB（R-G-B 通道序，而默认是 OpenCV 的 BGR），可在客户端用 `cv2.cvtColor(img, cv2.COLOR_BGR2RGB)` 得到；
+> 涉及额外的全图转换，不建议放到服务端热路径上。
 
 ## 使用共享内存
 ```python

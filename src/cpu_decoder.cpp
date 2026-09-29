@@ -7,6 +7,35 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/ostr.h>
 
+extern "C" {
+#include <libavutil/imgutils.h>
+}
+
+namespace
+{
+    // PixelFormat（本项目的像素格式枚举）→ FFmpeg 的 AVPixelFormat
+    bool toAvPixelFormat(uint32_t pixel_format, AVPixelFormat &out)
+    {
+        switch (pixel_format)
+        {
+        case static_cast<uint32_t>(PixelFormat::BGR):
+            out = AV_PIX_FMT_BGR24;
+            return true;
+        case static_cast<uint32_t>(PixelFormat::NV12):
+            out = AV_PIX_FMT_NV12;
+            return true;
+        case static_cast<uint32_t>(PixelFormat::I420):
+            out = AV_PIX_FMT_YUV420P;
+            return true;
+        case static_cast<uint32_t>(PixelFormat::YUYV422):
+            out = AV_PIX_FMT_YUYV422;
+            return true;
+        default:
+            return false;
+        }
+    }
+}
+
 // grab() 内的耗时拆分：demux（等网络/等下一个包） vs 解码本身。
 // 仅用于诊断（RTSP_PROFILE=1 时每秒打印一次）：“解码慢”和“在等源帧”是完全不同的结论。
 namespace
@@ -174,11 +203,11 @@ bool CpuDecoder::grab()
     return true;
 }
 
-bool CpuDecoder::retrieve(cv::Mat &frame, bool need_data)
+AVFrame *CpuDecoder::takePendingFrame()
 {
     frames_to_skip_ = 0;
     if (!isOpened() || !frame_ready_.load(std::memory_order_acquire))
-        return false;
+        return nullptr;
 
     // 消费掉这一帧，标记为未准备，等待下一次 grab
     frame_ready_.store(false, std::memory_order_release);
@@ -186,33 +215,118 @@ bool CpuDecoder::retrieve(cv::Mat &frame, bool need_data)
     if (frames_to_skip_ > 0)
     {
         frames_to_skip_--;
+        return nullptr;
+    }
+
+    return current_frame_;
+}
+
+bool CpuDecoder::retrieve(cv::Mat &frame, bool need_data)
+{
+    AVFrame *av_frame = takePendingFrame();
+    if (!av_frame)
+        return false;
+
+    if (!need_data)
+        return true;
+
+    int width = decoder_->get_width();
+    int height = decoder_->get_height();
+
+    // 防御编程：视频格式尚未解析时跳过
+    if (width <= 0 || height <= 0)
+    {
+        spdlog::warn("Video format not yet parsed, width={}, height={}", width, height);
         return false;
     }
 
-    if (need_data && current_frame_)
+    // 创建对应大小的 cv::Mat
+    frame.create(height, width, CV_8UC3);
+
+    // 利用 FFmpegDecoder 内部的 sws_scale 将 YUV 转为 BGR 写进 cv::Mat 的内存中
+    if (!decoder_->convert_to_bgr(av_frame, frame.data, width * 3))
     {
-        int width = decoder_->get_width();
-        int height = decoder_->get_height();
-
-        // 防御编程：视频格式尚未解析时跳过
-        if (width <= 0 || height <= 0)
-        {
-            spdlog::warn("Video format not yet parsed, width={}, height={}", width, height);
-            return false;
-        }
-
-        // 创建对应大小的 cv::Mat
-        frame.create(height, width, CV_8UC3);
-        int bgr_linesize = width * 3;
-
-        // 利用 FFmpegDecoder 内部的 sws_scale 将 YUV 转为 BGR 写进 cv::Mat 的内存中
-        bool convert_ok = decoder_->convert_to_bgr(current_frame_, frame.data, bgr_linesize);
-        if (!convert_ok)
-        {
-            spdlog::error("Failed to convert frame to BGR");
-            return false;
-        }
+        spdlog::error("Failed to convert frame to BGR");
+        return false;
     }
+    return true;
+}
+
+// 以指定像素格式取出原始帧（共享内存零拷贝通道使用）。
+// 与 retrieve() 共用同一套取帧/跳帧逻辑，区别只在于 sws_scale 的目标格式：
+// 不经过 BGR 中转，因此没有色度损失，也不多一次转换。
+bool CpuDecoder::retrieveRaw(RawFrame &out, uint32_t pixel_format)
+{
+    out.release();
+
+    AVPixelFormat dst_fmt = AV_PIX_FMT_NONE;
+    if (!toAvPixelFormat(pixel_format, dst_fmt))
+    {
+        spdlog::error("[CpuDecoder] Unsupported pixel format {} for stream", pixel_format);
+        return false;
+    }
+
+    AVFrame *av_frame = takePendingFrame();
+    if (!av_frame)
+        return false;
+
+    const int width = decoder_->get_width();
+    const int height = decoder_->get_height();
+    if (width <= 0 || height <= 0)
+    {
+        spdlog::warn("[CpuDecoder] Video format not yet parsed, width={}, height={}", width, height);
+        return false;
+    }
+
+    // 按目标格式准备 CV Mat 缓冲（紧密排列，无行末 padding）。
+    // 注意：YUV420 的缓冲行数是 H*3/2，但 out.width/height 仍记录图像宽高。
+    const int chroma_h = (height + 1) / 2;
+    int rows = height;
+    int cols = width;
+    int type = CV_8UC3;
+    int linesize = width * 3;
+    switch (pixel_format)
+    {
+    case static_cast<uint32_t>(PixelFormat::NV12):
+    case static_cast<uint32_t>(PixelFormat::I420):
+        rows = height + chroma_h;
+        cols = width;
+        type = CV_8UC1;
+        linesize = width;
+        break;
+    case static_cast<uint32_t>(PixelFormat::YUYV422):
+        rows = height;
+        cols = width;
+        type = CV_8UC2;
+        linesize = width * 2;
+        break;
+    default: // BGR24
+        break;
+    }
+    out.buffer.create(rows, cols, type);
+
+    // 紧凑布局自检：宽/高为奇数时 sws 的平面步长可能与我们分配的 Mat 不一致，
+    // 此时退化为“按 sws 要求的一维缓冲”，保证数据正确优先于形状好看。
+    const int expect = av_image_get_buffer_size(dst_fmt, width, height, 1);
+    const size_t got = out.buffer.total() * out.buffer.elemSize();
+    if (expect < 0 || static_cast<size_t>(expect) != got)
+    {
+        spdlog::warn("[CpuDecoder] {} buffer size mismatch (expect {} got {}) for {}x{}, use flat buffer",
+                     pixelFormatName(pixel_format), expect, got, width, height);
+        out.buffer.create(expect > 0 ? expect : 1, 1, CV_8UC1);
+    }
+
+    if (!decoder_->convert_to_format(av_frame, out.buffer.data, linesize, dst_fmt))
+    {
+        spdlog::error("[CpuDecoder] Failed to convert frame to {}", pixelFormatName(pixel_format));
+        out.release();
+        return false;
+    }
+
+    out.width = width;
+    out.height = height;
+    out.step = static_cast<uint32_t>(linesize);
+    out.pixel_format = pixel_format;
     return true;
 }
 

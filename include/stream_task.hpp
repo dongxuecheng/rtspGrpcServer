@@ -38,7 +38,8 @@ public:
                bool use_shared_mem,
                std::unique_ptr<IVideoDecoder> decoder,
                bool use_gpu_encoder,
-               int jpeg_quality);
+               int jpeg_quality,
+               uint32_t pixel_format = static_cast<uint32_t>(PixelFormat::BGR));
 
     ~StreamTask();
 
@@ -68,6 +69,9 @@ public:
     int getDecodeIntervalMs() const { return decode_interval_ms_; }
     bool shouldKeepOnFailure() const { return keep_on_failure_; }
     bool usesSharedMemory() const { return use_shared_mem_; }
+    // 共享内存原始帧的像素格式（PixelFormat）；仅 use_shared_mem_ 为 true 时有意义。
+    // gRPC 通道始终返回 JPEG，与本值无关。
+    uint32_t getPixelFormat() const { return pixel_format_; }
     int getHeartbeatTimeMs() const { return heartbeat_timeout_ms_; }
     bool onlyKeyFrames() const { return decoder_->onlyKeyFrames(); }
 
@@ -125,8 +129,10 @@ private:
     void stepIO();
     void ioLoop();
 
-    // 共享内存通道：首次按实际帧大小创建；帧变大（分辨率切换）时自动扩容重建
-    void ensureShmChannel(const cv::Mat &frame);
+    // 共享内存通道：首次按实际帧大小创建；帧变大（分辨率切换）时自动扩容重建。
+    // frame_bytes 为单帧字节数（YUV 格式下与宽高的乘积不同），
+    // width/height/channels 仅用于日志。
+    void ensureShmChannel(size_t frame_bytes, int width, int height, int channels);
 
     // 阶段2：计算操作 (Decode / Convert / Encode) -> 运行在 计算线程池
     void stepCompute();
@@ -151,6 +157,9 @@ private:
     int decoder_type_;
     bool keep_on_failure_;
     bool use_shared_mem_;
+    // 共享内存原始帧的像素格式（PixelFormat）：BGR/NV12/I420/YUYV422。
+    // 在 StartStream 时固定；只有 SHM 通道受影响（gRPC 始终返回 JPEG）。
+    uint32_t pixel_format_ = static_cast<uint32_t>(PixelFormat::BGR);
     int gpu_id_ = -1;
 
     // 保存启动时指定的解码器类型和 GPU ID，便于 HIK_SDK 切回 RTSP 时恢复
@@ -270,6 +279,10 @@ private:
 
     // 用于 CPU 路径的图像缓存，避免反复分配 cv::Mat
     cv::Mat reusable_frame_;
+
+    // 共享内存路径的原始帧缓存（支持 BGR / NV12 / I420 / YUYV422）。
+    // 与 reusable_frame_ 分开：后者是 gRPC/JPEG 路径专用的 BGR 缓冲。
+    RawFrame reusable_raw_frame_;
 
     // 性能监控：记录 grab 结束时间，用于计算调度延迟
     std::chrono::steady_clock::time_point last_grab_end_;

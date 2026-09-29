@@ -65,6 +65,15 @@ extern ListStreamsRequestDefaultTypeInternal _ListStreamsRequest_default_instanc
 class ListStreamsResponse;
 struct ListStreamsResponseDefaultTypeInternal;
 extern ListStreamsResponseDefaultTypeInternal _ListStreamsResponse_default_instance_;
+class ShmLayoutInfo;
+struct ShmLayoutInfoDefaultTypeInternal;
+extern ShmLayoutInfoDefaultTypeInternal _ShmLayoutInfo_default_instance_;
+class ShmLayoutRequest;
+struct ShmLayoutRequestDefaultTypeInternal;
+extern ShmLayoutRequestDefaultTypeInternal _ShmLayoutRequest_default_instance_;
+class ShmLayoutResponse;
+struct ShmLayoutResponseDefaultTypeInternal;
+extern ShmLayoutResponseDefaultTypeInternal _ShmLayoutResponse_default_instance_;
 class StartRequest;
 struct StartRequestDefaultTypeInternal;
 extern StartRequestDefaultTypeInternal _StartRequest_default_instance_;
@@ -97,6 +106,9 @@ template<> ::streamingservice::FrameRequest* Arena::CreateMaybeMessage<::streami
 template<> ::streamingservice::FrameResponse* Arena::CreateMaybeMessage<::streamingservice::FrameResponse>(Arena*);
 template<> ::streamingservice::ListStreamsRequest* Arena::CreateMaybeMessage<::streamingservice::ListStreamsRequest>(Arena*);
 template<> ::streamingservice::ListStreamsResponse* Arena::CreateMaybeMessage<::streamingservice::ListStreamsResponse>(Arena*);
+template<> ::streamingservice::ShmLayoutInfo* Arena::CreateMaybeMessage<::streamingservice::ShmLayoutInfo>(Arena*);
+template<> ::streamingservice::ShmLayoutRequest* Arena::CreateMaybeMessage<::streamingservice::ShmLayoutRequest>(Arena*);
+template<> ::streamingservice::ShmLayoutResponse* Arena::CreateMaybeMessage<::streamingservice::ShmLayoutResponse>(Arena*);
 template<> ::streamingservice::StartRequest* Arena::CreateMaybeMessage<::streamingservice::StartRequest>(Arena*);
 template<> ::streamingservice::StartResponse* Arena::CreateMaybeMessage<::streamingservice::StartResponse>(Arena*);
 template<> ::streamingservice::StopRequest* Arena::CreateMaybeMessage<::streamingservice::StopRequest>(Arena*);
@@ -111,12 +123,13 @@ namespace streamingservice {
 enum DecoderType : int {
   DECODER_CPU_FFMPEG = 0,
   DECODER_GPU_NVCUVID = 1,
+  DECODER_HIK_SDK = 2,
   DecoderType_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   DecoderType_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
 };
 bool DecoderType_IsValid(int value);
 constexpr DecoderType DecoderType_MIN = DECODER_CPU_FFMPEG;
-constexpr DecoderType DecoderType_MAX = DECODER_GPU_NVCUVID;
+constexpr DecoderType DecoderType_MAX = DECODER_HIK_SDK;
 constexpr int DecoderType_ARRAYSIZE = DecoderType_MAX + 1;
 
 const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* DecoderType_descriptor();
@@ -159,6 +172,33 @@ inline bool StreamStatus_Parse(
     ::PROTOBUF_NAMESPACE_ID::ConstStringParam name, StreamStatus* value) {
   return ::PROTOBUF_NAMESPACE_ID::internal::ParseNamedEnum<StreamStatus>(
     StreamStatus_descriptor(), name, value);
+}
+enum PixelFormat : int {
+  PIXEL_BGR = 0,
+  PIXEL_NV12 = 1,
+  PIXEL_I420 = 2,
+  PIXEL_YUYV422 = 3,
+  PixelFormat_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
+  PixelFormat_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
+};
+bool PixelFormat_IsValid(int value);
+constexpr PixelFormat PixelFormat_MIN = PIXEL_BGR;
+constexpr PixelFormat PixelFormat_MAX = PIXEL_YUYV422;
+constexpr int PixelFormat_ARRAYSIZE = PixelFormat_MAX + 1;
+
+const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* PixelFormat_descriptor();
+template<typename T>
+inline const std::string& PixelFormat_Name(T enum_t_value) {
+  static_assert(::std::is_same<T, PixelFormat>::value ||
+    ::std::is_integral<T>::value,
+    "Incorrect type passed to function PixelFormat_Name.");
+  return ::PROTOBUF_NAMESPACE_ID::internal::NameOfEnum(
+    PixelFormat_descriptor(), enum_t_value);
+}
+inline bool PixelFormat_Parse(
+    ::PROTOBUF_NAMESPACE_ID::ConstStringParam name, PixelFormat* value) {
+  return ::PROTOBUF_NAMESPACE_ID::internal::ParseNamedEnum<PixelFormat>(
+    PixelFormat_descriptor(), name, value);
 }
 // ===================================================================
 
@@ -291,6 +331,7 @@ class StartRequest final :
     kKeepOnFailureFieldNumber = 6,
     kUseSharedMemFieldNumber = 7,
     kOnlyKeyFramesFieldNumber = 8,
+    kPixelFormatFieldNumber = 9,
   };
   // string rtsp_url = 1;
   void clear_rtsp_url();
@@ -369,6 +410,15 @@ class StartRequest final :
   void _internal_set_only_key_frames(bool value);
   public:
 
+  // .streamingservice.PixelFormat pixel_format = 9;
+  void clear_pixel_format();
+  ::streamingservice::PixelFormat pixel_format() const;
+  void set_pixel_format(::streamingservice::PixelFormat value);
+  private:
+  ::streamingservice::PixelFormat _internal_pixel_format() const;
+  void _internal_set_pixel_format(::streamingservice::PixelFormat value);
+  public:
+
   // @@protoc_insertion_point(class_scope:streamingservice.StartRequest)
  private:
   class _Internal;
@@ -385,6 +435,7 @@ class StartRequest final :
     bool keep_on_failure_;
     bool use_shared_mem_;
     bool only_key_frames_;
+    int pixel_format_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1331,6 +1382,7 @@ class FrameResponse final :
     kMessageFieldNumber = 3,
     kFrameSeqFieldNumber = 4,
     kSuccessFieldNumber = 1,
+    kCorruptedFieldNumber = 5,
   };
   // bytes image_data = 2;
   void clear_image_data();
@@ -1378,6 +1430,15 @@ class FrameResponse final :
   void _internal_set_success(bool value);
   public:
 
+  // bool corrupted = 5;
+  void clear_corrupted();
+  bool corrupted() const;
+  void set_corrupted(bool value);
+  private:
+  bool _internal_corrupted() const;
+  void _internal_set_corrupted(bool value);
+  public:
+
   // @@protoc_insertion_point(class_scope:streamingservice.FrameResponse)
  private:
   class _Internal;
@@ -1390,6 +1451,7 @@ class FrameResponse final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr message_;
     int64_t frame_seq_;
     bool success_;
+    bool corrupted_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1647,6 +1709,11 @@ class StreamInfo final :
     kKeepOnFailureFieldNumber = 9,
     kOnlyKeyFramesFieldNumber = 10,
     kUseSharedMemFieldNumber = 11,
+    kMediaLagMsFieldNumber = 13,
+    kFpsFieldNumber = 12,
+    kCorruptedFramesFieldNumber = 14,
+    kGlitchRatioFieldNumber = 15,
+    kPixelFormatFieldNumber = 16,
   };
   // string stream_id = 1;
   void clear_stream_id();
@@ -1757,6 +1824,51 @@ class StreamInfo final :
   void _internal_set_use_shared_mem(bool value);
   public:
 
+  // int32 media_lag_ms = 13;
+  void clear_media_lag_ms();
+  int32_t media_lag_ms() const;
+  void set_media_lag_ms(int32_t value);
+  private:
+  int32_t _internal_media_lag_ms() const;
+  void _internal_set_media_lag_ms(int32_t value);
+  public:
+
+  // double fps = 12;
+  void clear_fps();
+  double fps() const;
+  void set_fps(double value);
+  private:
+  double _internal_fps() const;
+  void _internal_set_fps(double value);
+  public:
+
+  // uint64 corrupted_frames = 14;
+  void clear_corrupted_frames();
+  uint64_t corrupted_frames() const;
+  void set_corrupted_frames(uint64_t value);
+  private:
+  uint64_t _internal_corrupted_frames() const;
+  void _internal_set_corrupted_frames(uint64_t value);
+  public:
+
+  // double glitch_ratio = 15;
+  void clear_glitch_ratio();
+  double glitch_ratio() const;
+  void set_glitch_ratio(double value);
+  private:
+  double _internal_glitch_ratio() const;
+  void _internal_set_glitch_ratio(double value);
+  public:
+
+  // .streamingservice.PixelFormat pixel_format = 16;
+  void clear_pixel_format();
+  ::streamingservice::PixelFormat pixel_format() const;
+  void set_pixel_format(::streamingservice::PixelFormat value);
+  private:
+  ::streamingservice::PixelFormat _internal_pixel_format() const;
+  void _internal_set_pixel_format(::streamingservice::PixelFormat value);
+  public:
+
   // @@protoc_insertion_point(class_scope:streamingservice.StreamInfo)
  private:
   class _Internal;
@@ -1776,6 +1888,11 @@ class StreamInfo final :
     bool keep_on_failure_;
     bool only_key_frames_;
     bool use_shared_mem_;
+    int32_t media_lag_ms_;
+    double fps_;
+    uint64_t corrupted_frames_;
+    double glitch_ratio_;
+    int pixel_format_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2608,6 +2725,555 @@ class UpdateStreamResponse final :
   union { Impl_ _impl_; };
   friend struct ::TableStruct_stream_5fservice_2eproto;
 };
+// -------------------------------------------------------------------
+
+class ShmLayoutInfo final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:streamingservice.ShmLayoutInfo) */ {
+ public:
+  inline ShmLayoutInfo() : ShmLayoutInfo(nullptr) {}
+  ~ShmLayoutInfo() override;
+  explicit PROTOBUF_CONSTEXPR ShmLayoutInfo(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  ShmLayoutInfo(const ShmLayoutInfo& from);
+  ShmLayoutInfo(ShmLayoutInfo&& from) noexcept
+    : ShmLayoutInfo() {
+    *this = ::std::move(from);
+  }
+
+  inline ShmLayoutInfo& operator=(const ShmLayoutInfo& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline ShmLayoutInfo& operator=(ShmLayoutInfo&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const ShmLayoutInfo& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const ShmLayoutInfo* internal_default_instance() {
+    return reinterpret_cast<const ShmLayoutInfo*>(
+               &_ShmLayoutInfo_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    14;
+
+  friend void swap(ShmLayoutInfo& a, ShmLayoutInfo& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(ShmLayoutInfo* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(ShmLayoutInfo* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  ShmLayoutInfo* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<ShmLayoutInfo>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const ShmLayoutInfo& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const ShmLayoutInfo& from) {
+    ShmLayoutInfo::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(ShmLayoutInfo* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "streamingservice.ShmLayoutInfo";
+  }
+  protected:
+  explicit ShmLayoutInfo(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kSlotCountFieldNumber = 1,
+    kMaxFrameBytesFieldNumber = 2,
+    kAlignmentFieldNumber = 3,
+    kSlotSizeFieldNumber = 4,
+    kSeqOffsetFieldNumber = 5,
+    kMetaOffsetFieldNumber = 6,
+    kPayloadOffsetFieldNumber = 7,
+    kMetaDataSizeFieldNumber = 8,
+    kHeadIdxOffsetFieldNumber = 9,
+    kTotalSizeFieldNumber = 10,
+  };
+  // uint64 slot_count = 1;
+  void clear_slot_count();
+  uint64_t slot_count() const;
+  void set_slot_count(uint64_t value);
+  private:
+  uint64_t _internal_slot_count() const;
+  void _internal_set_slot_count(uint64_t value);
+  public:
+
+  // uint64 max_frame_bytes = 2;
+  void clear_max_frame_bytes();
+  uint64_t max_frame_bytes() const;
+  void set_max_frame_bytes(uint64_t value);
+  private:
+  uint64_t _internal_max_frame_bytes() const;
+  void _internal_set_max_frame_bytes(uint64_t value);
+  public:
+
+  // uint64 alignment = 3;
+  void clear_alignment();
+  uint64_t alignment() const;
+  void set_alignment(uint64_t value);
+  private:
+  uint64_t _internal_alignment() const;
+  void _internal_set_alignment(uint64_t value);
+  public:
+
+  // uint64 slot_size = 4;
+  void clear_slot_size();
+  uint64_t slot_size() const;
+  void set_slot_size(uint64_t value);
+  private:
+  uint64_t _internal_slot_size() const;
+  void _internal_set_slot_size(uint64_t value);
+  public:
+
+  // uint64 seq_offset = 5;
+  void clear_seq_offset();
+  uint64_t seq_offset() const;
+  void set_seq_offset(uint64_t value);
+  private:
+  uint64_t _internal_seq_offset() const;
+  void _internal_set_seq_offset(uint64_t value);
+  public:
+
+  // uint64 meta_offset = 6;
+  void clear_meta_offset();
+  uint64_t meta_offset() const;
+  void set_meta_offset(uint64_t value);
+  private:
+  uint64_t _internal_meta_offset() const;
+  void _internal_set_meta_offset(uint64_t value);
+  public:
+
+  // uint64 payload_offset = 7;
+  void clear_payload_offset();
+  uint64_t payload_offset() const;
+  void set_payload_offset(uint64_t value);
+  private:
+  uint64_t _internal_payload_offset() const;
+  void _internal_set_payload_offset(uint64_t value);
+  public:
+
+  // uint64 meta_data_size = 8;
+  void clear_meta_data_size();
+  uint64_t meta_data_size() const;
+  void set_meta_data_size(uint64_t value);
+  private:
+  uint64_t _internal_meta_data_size() const;
+  void _internal_set_meta_data_size(uint64_t value);
+  public:
+
+  // uint64 head_idx_offset = 9;
+  void clear_head_idx_offset();
+  uint64_t head_idx_offset() const;
+  void set_head_idx_offset(uint64_t value);
+  private:
+  uint64_t _internal_head_idx_offset() const;
+  void _internal_set_head_idx_offset(uint64_t value);
+  public:
+
+  // uint64 total_size = 10;
+  void clear_total_size();
+  uint64_t total_size() const;
+  void set_total_size(uint64_t value);
+  private:
+  uint64_t _internal_total_size() const;
+  void _internal_set_total_size(uint64_t value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:streamingservice.ShmLayoutInfo)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    uint64_t slot_count_;
+    uint64_t max_frame_bytes_;
+    uint64_t alignment_;
+    uint64_t slot_size_;
+    uint64_t seq_offset_;
+    uint64_t meta_offset_;
+    uint64_t payload_offset_;
+    uint64_t meta_data_size_;
+    uint64_t head_idx_offset_;
+    uint64_t total_size_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_stream_5fservice_2eproto;
+};
+// -------------------------------------------------------------------
+
+class ShmLayoutRequest final :
+    public ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase /* @@protoc_insertion_point(class_definition:streamingservice.ShmLayoutRequest) */ {
+ public:
+  inline ShmLayoutRequest() : ShmLayoutRequest(nullptr) {}
+  explicit PROTOBUF_CONSTEXPR ShmLayoutRequest(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  ShmLayoutRequest(const ShmLayoutRequest& from);
+  ShmLayoutRequest(ShmLayoutRequest&& from) noexcept
+    : ShmLayoutRequest() {
+    *this = ::std::move(from);
+  }
+
+  inline ShmLayoutRequest& operator=(const ShmLayoutRequest& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline ShmLayoutRequest& operator=(ShmLayoutRequest&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const ShmLayoutRequest& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const ShmLayoutRequest* internal_default_instance() {
+    return reinterpret_cast<const ShmLayoutRequest*>(
+               &_ShmLayoutRequest_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    15;
+
+  friend void swap(ShmLayoutRequest& a, ShmLayoutRequest& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(ShmLayoutRequest* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(ShmLayoutRequest* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  ShmLayoutRequest* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<ShmLayoutRequest>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::CopyFrom;
+  inline void CopyFrom(const ShmLayoutRequest& from) {
+    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::CopyImpl(*this, from);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::MergeFrom;
+  void MergeFrom(const ShmLayoutRequest& from) {
+    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::MergeImpl(*this, from);
+  }
+  public:
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "streamingservice.ShmLayoutRequest";
+  }
+  protected:
+  explicit ShmLayoutRequest(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  // @@protoc_insertion_point(class_scope:streamingservice.ShmLayoutRequest)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+  };
+  friend struct ::TableStruct_stream_5fservice_2eproto;
+};
+// -------------------------------------------------------------------
+
+class ShmLayoutResponse final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:streamingservice.ShmLayoutResponse) */ {
+ public:
+  inline ShmLayoutResponse() : ShmLayoutResponse(nullptr) {}
+  ~ShmLayoutResponse() override;
+  explicit PROTOBUF_CONSTEXPR ShmLayoutResponse(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  ShmLayoutResponse(const ShmLayoutResponse& from);
+  ShmLayoutResponse(ShmLayoutResponse&& from) noexcept
+    : ShmLayoutResponse() {
+    *this = ::std::move(from);
+  }
+
+  inline ShmLayoutResponse& operator=(const ShmLayoutResponse& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline ShmLayoutResponse& operator=(ShmLayoutResponse&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const ShmLayoutResponse& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const ShmLayoutResponse* internal_default_instance() {
+    return reinterpret_cast<const ShmLayoutResponse*>(
+               &_ShmLayoutResponse_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    16;
+
+  friend void swap(ShmLayoutResponse& a, ShmLayoutResponse& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(ShmLayoutResponse* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(ShmLayoutResponse* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  ShmLayoutResponse* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<ShmLayoutResponse>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const ShmLayoutResponse& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const ShmLayoutResponse& from) {
+    ShmLayoutResponse::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(ShmLayoutResponse* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "streamingservice.ShmLayoutResponse";
+  }
+  protected:
+  explicit ShmLayoutResponse(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kMessageFieldNumber = 2,
+    kLayoutFieldNumber = 3,
+    kSuccessFieldNumber = 1,
+  };
+  // string message = 2;
+  void clear_message();
+  const std::string& message() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_message(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_message();
+  PROTOBUF_NODISCARD std::string* release_message();
+  void set_allocated_message(std::string* message);
+  private:
+  const std::string& _internal_message() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_message(const std::string& value);
+  std::string* _internal_mutable_message();
+  public:
+
+  // .streamingservice.ShmLayoutInfo layout = 3;
+  bool has_layout() const;
+  private:
+  bool _internal_has_layout() const;
+  public:
+  void clear_layout();
+  const ::streamingservice::ShmLayoutInfo& layout() const;
+  PROTOBUF_NODISCARD ::streamingservice::ShmLayoutInfo* release_layout();
+  ::streamingservice::ShmLayoutInfo* mutable_layout();
+  void set_allocated_layout(::streamingservice::ShmLayoutInfo* layout);
+  private:
+  const ::streamingservice::ShmLayoutInfo& _internal_layout() const;
+  ::streamingservice::ShmLayoutInfo* _internal_mutable_layout();
+  public:
+  void unsafe_arena_set_allocated_layout(
+      ::streamingservice::ShmLayoutInfo* layout);
+  ::streamingservice::ShmLayoutInfo* unsafe_arena_release_layout();
+
+  // bool success = 1;
+  void clear_success();
+  bool success() const;
+  void set_success(bool value);
+  private:
+  bool _internal_success() const;
+  void _internal_set_success(bool value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:streamingservice.ShmLayoutResponse)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr message_;
+    ::streamingservice::ShmLayoutInfo* layout_;
+    bool success_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_stream_5fservice_2eproto;
+};
 // ===================================================================
 
 
@@ -2807,6 +3473,26 @@ inline void StartRequest::_internal_set_only_key_frames(bool value) {
 inline void StartRequest::set_only_key_frames(bool value) {
   _internal_set_only_key_frames(value);
   // @@protoc_insertion_point(field_set:streamingservice.StartRequest.only_key_frames)
+}
+
+// .streamingservice.PixelFormat pixel_format = 9;
+inline void StartRequest::clear_pixel_format() {
+  _impl_.pixel_format_ = 0;
+}
+inline ::streamingservice::PixelFormat StartRequest::_internal_pixel_format() const {
+  return static_cast< ::streamingservice::PixelFormat >(_impl_.pixel_format_);
+}
+inline ::streamingservice::PixelFormat StartRequest::pixel_format() const {
+  // @@protoc_insertion_point(field_get:streamingservice.StartRequest.pixel_format)
+  return _internal_pixel_format();
+}
+inline void StartRequest::_internal_set_pixel_format(::streamingservice::PixelFormat value) {
+  
+  _impl_.pixel_format_ = value;
+}
+inline void StartRequest::set_pixel_format(::streamingservice::PixelFormat value) {
+  _internal_set_pixel_format(value);
+  // @@protoc_insertion_point(field_set:streamingservice.StartRequest.pixel_format)
 }
 
 // -------------------------------------------------------------------
@@ -3333,6 +4019,26 @@ inline void FrameResponse::set_frame_seq(int64_t value) {
   // @@protoc_insertion_point(field_set:streamingservice.FrameResponse.frame_seq)
 }
 
+// bool corrupted = 5;
+inline void FrameResponse::clear_corrupted() {
+  _impl_.corrupted_ = false;
+}
+inline bool FrameResponse::_internal_corrupted() const {
+  return _impl_.corrupted_;
+}
+inline bool FrameResponse::corrupted() const {
+  // @@protoc_insertion_point(field_get:streamingservice.FrameResponse.corrupted)
+  return _internal_corrupted();
+}
+inline void FrameResponse::_internal_set_corrupted(bool value) {
+  
+  _impl_.corrupted_ = value;
+}
+inline void FrameResponse::set_corrupted(bool value) {
+  _internal_set_corrupted(value);
+  // @@protoc_insertion_point(field_set:streamingservice.FrameResponse.corrupted)
+}
+
 // -------------------------------------------------------------------
 
 // ListStreamsRequest
@@ -3619,6 +4325,106 @@ inline void StreamInfo::_internal_set_use_shared_mem(bool value) {
 inline void StreamInfo::set_use_shared_mem(bool value) {
   _internal_set_use_shared_mem(value);
   // @@protoc_insertion_point(field_set:streamingservice.StreamInfo.use_shared_mem)
+}
+
+// double fps = 12;
+inline void StreamInfo::clear_fps() {
+  _impl_.fps_ = 0;
+}
+inline double StreamInfo::_internal_fps() const {
+  return _impl_.fps_;
+}
+inline double StreamInfo::fps() const {
+  // @@protoc_insertion_point(field_get:streamingservice.StreamInfo.fps)
+  return _internal_fps();
+}
+inline void StreamInfo::_internal_set_fps(double value) {
+  
+  _impl_.fps_ = value;
+}
+inline void StreamInfo::set_fps(double value) {
+  _internal_set_fps(value);
+  // @@protoc_insertion_point(field_set:streamingservice.StreamInfo.fps)
+}
+
+// int32 media_lag_ms = 13;
+inline void StreamInfo::clear_media_lag_ms() {
+  _impl_.media_lag_ms_ = 0;
+}
+inline int32_t StreamInfo::_internal_media_lag_ms() const {
+  return _impl_.media_lag_ms_;
+}
+inline int32_t StreamInfo::media_lag_ms() const {
+  // @@protoc_insertion_point(field_get:streamingservice.StreamInfo.media_lag_ms)
+  return _internal_media_lag_ms();
+}
+inline void StreamInfo::_internal_set_media_lag_ms(int32_t value) {
+  
+  _impl_.media_lag_ms_ = value;
+}
+inline void StreamInfo::set_media_lag_ms(int32_t value) {
+  _internal_set_media_lag_ms(value);
+  // @@protoc_insertion_point(field_set:streamingservice.StreamInfo.media_lag_ms)
+}
+
+// uint64 corrupted_frames = 14;
+inline void StreamInfo::clear_corrupted_frames() {
+  _impl_.corrupted_frames_ = uint64_t{0u};
+}
+inline uint64_t StreamInfo::_internal_corrupted_frames() const {
+  return _impl_.corrupted_frames_;
+}
+inline uint64_t StreamInfo::corrupted_frames() const {
+  // @@protoc_insertion_point(field_get:streamingservice.StreamInfo.corrupted_frames)
+  return _internal_corrupted_frames();
+}
+inline void StreamInfo::_internal_set_corrupted_frames(uint64_t value) {
+  
+  _impl_.corrupted_frames_ = value;
+}
+inline void StreamInfo::set_corrupted_frames(uint64_t value) {
+  _internal_set_corrupted_frames(value);
+  // @@protoc_insertion_point(field_set:streamingservice.StreamInfo.corrupted_frames)
+}
+
+// double glitch_ratio = 15;
+inline void StreamInfo::clear_glitch_ratio() {
+  _impl_.glitch_ratio_ = 0;
+}
+inline double StreamInfo::_internal_glitch_ratio() const {
+  return _impl_.glitch_ratio_;
+}
+inline double StreamInfo::glitch_ratio() const {
+  // @@protoc_insertion_point(field_get:streamingservice.StreamInfo.glitch_ratio)
+  return _internal_glitch_ratio();
+}
+inline void StreamInfo::_internal_set_glitch_ratio(double value) {
+  
+  _impl_.glitch_ratio_ = value;
+}
+inline void StreamInfo::set_glitch_ratio(double value) {
+  _internal_set_glitch_ratio(value);
+  // @@protoc_insertion_point(field_set:streamingservice.StreamInfo.glitch_ratio)
+}
+
+// .streamingservice.PixelFormat pixel_format = 16;
+inline void StreamInfo::clear_pixel_format() {
+  _impl_.pixel_format_ = 0;
+}
+inline ::streamingservice::PixelFormat StreamInfo::_internal_pixel_format() const {
+  return static_cast< ::streamingservice::PixelFormat >(_impl_.pixel_format_);
+}
+inline ::streamingservice::PixelFormat StreamInfo::pixel_format() const {
+  // @@protoc_insertion_point(field_get:streamingservice.StreamInfo.pixel_format)
+  return _internal_pixel_format();
+}
+inline void StreamInfo::_internal_set_pixel_format(::streamingservice::PixelFormat value) {
+  
+  _impl_.pixel_format_ = value;
+}
+inline void StreamInfo::set_pixel_format(::streamingservice::PixelFormat value) {
+  _internal_set_pixel_format(value);
+  // @@protoc_insertion_point(field_set:streamingservice.StreamInfo.pixel_format)
 }
 
 // -------------------------------------------------------------------
@@ -4061,9 +4867,387 @@ inline void UpdateStreamResponse::set_allocated_message(std::string* message) {
   // @@protoc_insertion_point(field_set_allocated:streamingservice.UpdateStreamResponse.message)
 }
 
+// -------------------------------------------------------------------
+
+// ShmLayoutInfo
+
+// uint64 slot_count = 1;
+inline void ShmLayoutInfo::clear_slot_count() {
+  _impl_.slot_count_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_slot_count() const {
+  return _impl_.slot_count_;
+}
+inline uint64_t ShmLayoutInfo::slot_count() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.slot_count)
+  return _internal_slot_count();
+}
+inline void ShmLayoutInfo::_internal_set_slot_count(uint64_t value) {
+  
+  _impl_.slot_count_ = value;
+}
+inline void ShmLayoutInfo::set_slot_count(uint64_t value) {
+  _internal_set_slot_count(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.slot_count)
+}
+
+// uint64 max_frame_bytes = 2;
+inline void ShmLayoutInfo::clear_max_frame_bytes() {
+  _impl_.max_frame_bytes_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_max_frame_bytes() const {
+  return _impl_.max_frame_bytes_;
+}
+inline uint64_t ShmLayoutInfo::max_frame_bytes() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.max_frame_bytes)
+  return _internal_max_frame_bytes();
+}
+inline void ShmLayoutInfo::_internal_set_max_frame_bytes(uint64_t value) {
+  
+  _impl_.max_frame_bytes_ = value;
+}
+inline void ShmLayoutInfo::set_max_frame_bytes(uint64_t value) {
+  _internal_set_max_frame_bytes(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.max_frame_bytes)
+}
+
+// uint64 alignment = 3;
+inline void ShmLayoutInfo::clear_alignment() {
+  _impl_.alignment_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_alignment() const {
+  return _impl_.alignment_;
+}
+inline uint64_t ShmLayoutInfo::alignment() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.alignment)
+  return _internal_alignment();
+}
+inline void ShmLayoutInfo::_internal_set_alignment(uint64_t value) {
+  
+  _impl_.alignment_ = value;
+}
+inline void ShmLayoutInfo::set_alignment(uint64_t value) {
+  _internal_set_alignment(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.alignment)
+}
+
+// uint64 slot_size = 4;
+inline void ShmLayoutInfo::clear_slot_size() {
+  _impl_.slot_size_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_slot_size() const {
+  return _impl_.slot_size_;
+}
+inline uint64_t ShmLayoutInfo::slot_size() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.slot_size)
+  return _internal_slot_size();
+}
+inline void ShmLayoutInfo::_internal_set_slot_size(uint64_t value) {
+  
+  _impl_.slot_size_ = value;
+}
+inline void ShmLayoutInfo::set_slot_size(uint64_t value) {
+  _internal_set_slot_size(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.slot_size)
+}
+
+// uint64 seq_offset = 5;
+inline void ShmLayoutInfo::clear_seq_offset() {
+  _impl_.seq_offset_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_seq_offset() const {
+  return _impl_.seq_offset_;
+}
+inline uint64_t ShmLayoutInfo::seq_offset() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.seq_offset)
+  return _internal_seq_offset();
+}
+inline void ShmLayoutInfo::_internal_set_seq_offset(uint64_t value) {
+  
+  _impl_.seq_offset_ = value;
+}
+inline void ShmLayoutInfo::set_seq_offset(uint64_t value) {
+  _internal_set_seq_offset(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.seq_offset)
+}
+
+// uint64 meta_offset = 6;
+inline void ShmLayoutInfo::clear_meta_offset() {
+  _impl_.meta_offset_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_meta_offset() const {
+  return _impl_.meta_offset_;
+}
+inline uint64_t ShmLayoutInfo::meta_offset() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.meta_offset)
+  return _internal_meta_offset();
+}
+inline void ShmLayoutInfo::_internal_set_meta_offset(uint64_t value) {
+  
+  _impl_.meta_offset_ = value;
+}
+inline void ShmLayoutInfo::set_meta_offset(uint64_t value) {
+  _internal_set_meta_offset(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.meta_offset)
+}
+
+// uint64 payload_offset = 7;
+inline void ShmLayoutInfo::clear_payload_offset() {
+  _impl_.payload_offset_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_payload_offset() const {
+  return _impl_.payload_offset_;
+}
+inline uint64_t ShmLayoutInfo::payload_offset() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.payload_offset)
+  return _internal_payload_offset();
+}
+inline void ShmLayoutInfo::_internal_set_payload_offset(uint64_t value) {
+  
+  _impl_.payload_offset_ = value;
+}
+inline void ShmLayoutInfo::set_payload_offset(uint64_t value) {
+  _internal_set_payload_offset(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.payload_offset)
+}
+
+// uint64 meta_data_size = 8;
+inline void ShmLayoutInfo::clear_meta_data_size() {
+  _impl_.meta_data_size_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_meta_data_size() const {
+  return _impl_.meta_data_size_;
+}
+inline uint64_t ShmLayoutInfo::meta_data_size() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.meta_data_size)
+  return _internal_meta_data_size();
+}
+inline void ShmLayoutInfo::_internal_set_meta_data_size(uint64_t value) {
+  
+  _impl_.meta_data_size_ = value;
+}
+inline void ShmLayoutInfo::set_meta_data_size(uint64_t value) {
+  _internal_set_meta_data_size(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.meta_data_size)
+}
+
+// uint64 head_idx_offset = 9;
+inline void ShmLayoutInfo::clear_head_idx_offset() {
+  _impl_.head_idx_offset_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_head_idx_offset() const {
+  return _impl_.head_idx_offset_;
+}
+inline uint64_t ShmLayoutInfo::head_idx_offset() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.head_idx_offset)
+  return _internal_head_idx_offset();
+}
+inline void ShmLayoutInfo::_internal_set_head_idx_offset(uint64_t value) {
+  
+  _impl_.head_idx_offset_ = value;
+}
+inline void ShmLayoutInfo::set_head_idx_offset(uint64_t value) {
+  _internal_set_head_idx_offset(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.head_idx_offset)
+}
+
+// uint64 total_size = 10;
+inline void ShmLayoutInfo::clear_total_size() {
+  _impl_.total_size_ = uint64_t{0u};
+}
+inline uint64_t ShmLayoutInfo::_internal_total_size() const {
+  return _impl_.total_size_;
+}
+inline uint64_t ShmLayoutInfo::total_size() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutInfo.total_size)
+  return _internal_total_size();
+}
+inline void ShmLayoutInfo::_internal_set_total_size(uint64_t value) {
+  
+  _impl_.total_size_ = value;
+}
+inline void ShmLayoutInfo::set_total_size(uint64_t value) {
+  _internal_set_total_size(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutInfo.total_size)
+}
+
+// -------------------------------------------------------------------
+
+// ShmLayoutRequest
+
+// -------------------------------------------------------------------
+
+// ShmLayoutResponse
+
+// bool success = 1;
+inline void ShmLayoutResponse::clear_success() {
+  _impl_.success_ = false;
+}
+inline bool ShmLayoutResponse::_internal_success() const {
+  return _impl_.success_;
+}
+inline bool ShmLayoutResponse::success() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutResponse.success)
+  return _internal_success();
+}
+inline void ShmLayoutResponse::_internal_set_success(bool value) {
+  
+  _impl_.success_ = value;
+}
+inline void ShmLayoutResponse::set_success(bool value) {
+  _internal_set_success(value);
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutResponse.success)
+}
+
+// string message = 2;
+inline void ShmLayoutResponse::clear_message() {
+  _impl_.message_.ClearToEmpty();
+}
+inline const std::string& ShmLayoutResponse::message() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutResponse.message)
+  return _internal_message();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ShmLayoutResponse::set_message(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.message_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:streamingservice.ShmLayoutResponse.message)
+}
+inline std::string* ShmLayoutResponse::mutable_message() {
+  std::string* _s = _internal_mutable_message();
+  // @@protoc_insertion_point(field_mutable:streamingservice.ShmLayoutResponse.message)
+  return _s;
+}
+inline const std::string& ShmLayoutResponse::_internal_message() const {
+  return _impl_.message_.Get();
+}
+inline void ShmLayoutResponse::_internal_set_message(const std::string& value) {
+  
+  _impl_.message_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ShmLayoutResponse::_internal_mutable_message() {
+  
+  return _impl_.message_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ShmLayoutResponse::release_message() {
+  // @@protoc_insertion_point(field_release:streamingservice.ShmLayoutResponse.message)
+  return _impl_.message_.Release();
+}
+inline void ShmLayoutResponse::set_allocated_message(std::string* message) {
+  if (message != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.message_.SetAllocated(message, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.message_.IsDefault()) {
+    _impl_.message_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:streamingservice.ShmLayoutResponse.message)
+}
+
+// .streamingservice.ShmLayoutInfo layout = 3;
+inline bool ShmLayoutResponse::_internal_has_layout() const {
+  return this != internal_default_instance() && _impl_.layout_ != nullptr;
+}
+inline bool ShmLayoutResponse::has_layout() const {
+  return _internal_has_layout();
+}
+inline void ShmLayoutResponse::clear_layout() {
+  if (GetArenaForAllocation() == nullptr && _impl_.layout_ != nullptr) {
+    delete _impl_.layout_;
+  }
+  _impl_.layout_ = nullptr;
+}
+inline const ::streamingservice::ShmLayoutInfo& ShmLayoutResponse::_internal_layout() const {
+  const ::streamingservice::ShmLayoutInfo* p = _impl_.layout_;
+  return p != nullptr ? *p : reinterpret_cast<const ::streamingservice::ShmLayoutInfo&>(
+      ::streamingservice::_ShmLayoutInfo_default_instance_);
+}
+inline const ::streamingservice::ShmLayoutInfo& ShmLayoutResponse::layout() const {
+  // @@protoc_insertion_point(field_get:streamingservice.ShmLayoutResponse.layout)
+  return _internal_layout();
+}
+inline void ShmLayoutResponse::unsafe_arena_set_allocated_layout(
+    ::streamingservice::ShmLayoutInfo* layout) {
+  if (GetArenaForAllocation() == nullptr) {
+    delete reinterpret_cast<::PROTOBUF_NAMESPACE_ID::MessageLite*>(_impl_.layout_);
+  }
+  _impl_.layout_ = layout;
+  if (layout) {
+    
+  } else {
+    
+  }
+  // @@protoc_insertion_point(field_unsafe_arena_set_allocated:streamingservice.ShmLayoutResponse.layout)
+}
+inline ::streamingservice::ShmLayoutInfo* ShmLayoutResponse::release_layout() {
+  
+  ::streamingservice::ShmLayoutInfo* temp = _impl_.layout_;
+  _impl_.layout_ = nullptr;
+#ifdef PROTOBUF_FORCE_COPY_IN_RELEASE
+  auto* old =  reinterpret_cast<::PROTOBUF_NAMESPACE_ID::MessageLite*>(temp);
+  temp = ::PROTOBUF_NAMESPACE_ID::internal::DuplicateIfNonNull(temp);
+  if (GetArenaForAllocation() == nullptr) { delete old; }
+#else  // PROTOBUF_FORCE_COPY_IN_RELEASE
+  if (GetArenaForAllocation() != nullptr) {
+    temp = ::PROTOBUF_NAMESPACE_ID::internal::DuplicateIfNonNull(temp);
+  }
+#endif  // !PROTOBUF_FORCE_COPY_IN_RELEASE
+  return temp;
+}
+inline ::streamingservice::ShmLayoutInfo* ShmLayoutResponse::unsafe_arena_release_layout() {
+  // @@protoc_insertion_point(field_release:streamingservice.ShmLayoutResponse.layout)
+  
+  ::streamingservice::ShmLayoutInfo* temp = _impl_.layout_;
+  _impl_.layout_ = nullptr;
+  return temp;
+}
+inline ::streamingservice::ShmLayoutInfo* ShmLayoutResponse::_internal_mutable_layout() {
+  
+  if (_impl_.layout_ == nullptr) {
+    auto* p = CreateMaybeMessage<::streamingservice::ShmLayoutInfo>(GetArenaForAllocation());
+    _impl_.layout_ = p;
+  }
+  return _impl_.layout_;
+}
+inline ::streamingservice::ShmLayoutInfo* ShmLayoutResponse::mutable_layout() {
+  ::streamingservice::ShmLayoutInfo* _msg = _internal_mutable_layout();
+  // @@protoc_insertion_point(field_mutable:streamingservice.ShmLayoutResponse.layout)
+  return _msg;
+}
+inline void ShmLayoutResponse::set_allocated_layout(::streamingservice::ShmLayoutInfo* layout) {
+  ::PROTOBUF_NAMESPACE_ID::Arena* message_arena = GetArenaForAllocation();
+  if (message_arena == nullptr) {
+    delete _impl_.layout_;
+  }
+  if (layout) {
+    ::PROTOBUF_NAMESPACE_ID::Arena* submessage_arena =
+        ::PROTOBUF_NAMESPACE_ID::Arena::InternalGetOwningArena(layout);
+    if (message_arena != submessage_arena) {
+      layout = ::PROTOBUF_NAMESPACE_ID::internal::GetOwnedMessage(
+          message_arena, layout, submessage_arena);
+    }
+    
+  } else {
+    
+  }
+  _impl_.layout_ = layout;
+  // @@protoc_insertion_point(field_set_allocated:streamingservice.ShmLayoutResponse.layout)
+}
+
 #ifdef __GNUC__
   #pragma GCC diagnostic pop
 #endif  // __GNUC__
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+
 // -------------------------------------------------------------------
 
 // -------------------------------------------------------------------
@@ -4106,6 +5290,11 @@ template <> struct is_proto_enum< ::streamingservice::StreamStatus> : ::std::tru
 template <>
 inline const EnumDescriptor* GetEnumDescriptor< ::streamingservice::StreamStatus>() {
   return ::streamingservice::StreamStatus_descriptor();
+}
+template <> struct is_proto_enum< ::streamingservice::PixelFormat> : ::std::true_type {};
+template <>
+inline const EnumDescriptor* GetEnumDescriptor< ::streamingservice::PixelFormat>() {
+  return ::streamingservice::PixelFormat_descriptor();
 }
 
 PROTOBUF_NAMESPACE_CLOSE

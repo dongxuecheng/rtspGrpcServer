@@ -76,6 +76,10 @@
         <input id="f-interval" type="number" value="0" min="0" step="10">
       </label>
 
+      <label title="仅“共享内存 (SHM)”开启时生效：SHM 里的原始帧用哪种像素格式。选 YUV 可省掉下游（如 Ascend DVPP）的色彩转换；gRPC 通道始终返回 JPEG。">原始帧格式 (SHM)
+        <select id="f-pixel"></select>
+      </label>
+
       <div class="form-foot span-all">
         <div class="checks">
           <label class="chk"><input type="checkbox" id="f-keyframe"><span>仅关键帧</span></label>

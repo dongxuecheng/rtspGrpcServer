@@ -140,6 +140,29 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
 
     std::string stream_id = generate_uuid();
     spdlog::info("Using Shared Memory: {}", request->use_shared_mem() ? "Enabled" : "Disabled");
+
+    // 共享内存原始帧的像素格式：仅 SHM 通道生效（gRPC 始终返回 JPEG）。
+    // 默认 PIXEL_BGR 保持旧行为；未开启 SHM 时忽略并保持 BGR，避免客户端误以为拿到 YUV。
+    uint32_t pixel_format = static_cast<uint32_t>(request->pixel_format());
+    if (pixel_format != static_cast<uint32_t>(PixelFormat::BGR) &&
+        pixel_format != static_cast<uint32_t>(PixelFormat::NV12) &&
+        pixel_format != static_cast<uint32_t>(PixelFormat::I420) &&
+        pixel_format != static_cast<uint32_t>(PixelFormat::YUYV422))
+    {
+        spdlog::warn("[StartStream] Unknown pixel_format {}, falling back to BGR24", pixel_format);
+        pixel_format = static_cast<uint32_t>(PixelFormat::BGR);
+    }
+    if (pixel_format != static_cast<uint32_t>(PixelFormat::BGR) && !request->use_shared_mem())
+    {
+        spdlog::warn("[StartStream] pixel_format {} requires use_shared_mem=true, ignoring (gRPC returns JPEG)",
+                     pixelFormatName(pixel_format));
+        pixel_format = static_cast<uint32_t>(PixelFormat::BGR);
+    }
+    if (request->use_shared_mem())
+    {
+        spdlog::info("[StartStream] SHM pixel format: {}", pixelFormatName(pixel_format));
+    }
+
     auto task = std::make_shared<StreamTask>(
         effective_url,
         stream_id,
@@ -151,7 +174,8 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         request->use_shared_mem(),
         std::move(decoder),
         use_gpu_encoder,
-        jpeg_quality);
+        jpeg_quality,
+        pixel_format);
 
     // 海康 SDK 模式下保存用户指定的 RTSP 解码参数，便于后续切回 RTSP 时恢复
     if (use_hik_sdk)
@@ -379,6 +403,7 @@ grpc::Status RTSPServiceImpl::CheckStream(grpc::ServerContext *context, const st
         info->set_decode_interval_ms(task->getDecodeIntervalMs());
         info->set_only_key_frames(task->onlyKeyFrames());
         info->set_use_shared_mem(task->usesSharedMemory());
+        info->set_pixel_format(static_cast<streamingservice::PixelFormat>(task->getPixelFormat()));
         info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
         info->set_keep_on_failure(task->shouldKeepOnFailure());
         info->set_fps(task->getPublishFps());
@@ -430,6 +455,7 @@ grpc::Status RTSPServiceImpl::ListStreams(grpc::ServerContext *context, const st
         stream_info->set_decode_interval_ms(task->getDecodeIntervalMs());
         stream_info->set_only_key_frames(task->onlyKeyFrames());
         stream_info->set_use_shared_mem(task->usesSharedMemory());
+        stream_info->set_pixel_format(static_cast<streamingservice::PixelFormat>(task->getPixelFormat()));
         stream_info->set_heartbeat_timeout_ms(task->getHeartbeatTimeMs());
         stream_info->set_keep_on_failure(task->shouldKeepOnFailure());
         stream_info->set_fps(task->getPublishFps());

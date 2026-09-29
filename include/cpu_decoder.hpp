@@ -31,6 +31,8 @@ public:
     bool isOpened() const override;
     bool grab() override;
     bool retrieve(cv::Mat &frame, bool need_data = true) override;
+    // 原生 YUV：直接用 sws_scale 输出目标格式（NV12/I420/YUYV422），无 BGR 往返
+    bool retrieveRaw(RawFrame &out, uint32_t pixel_format) override;
     void release() override;
 
     // 获取分辨率
@@ -59,6 +61,10 @@ public:
 
 private:
     bool reconnect(); // 重连辅助函数
+
+    // 取出当前待处理的 AVFrame（消费 frame_ready_ 与跳帧计数）。
+    // 返回 nullptr 表示本帧不可用（与 retrieve() 返回 false 语义一致）。
+    AVFrame *takePendingFrame();
 
 private:
     std::string last_url_;    // 保存 URL 供后续重连使用

@@ -58,7 +58,11 @@ ERROR - 连接服务器失败: 172.16.20.93:50052 不可达 (3s 超时: FutureTi
 | 流的模式 | 取帧路径 |
 |---|---|
 | gRPC JPEG（`use_shared_mem=false`） | 服务端返回已编码 JPEG → 本进程解码后按需缩放/重编码 |
-| SHM（`use_shared_mem=true`） | 本进程直接读共享内存原始帧 → 编码为 JPEG |
+| SHM + BGR24（默认） | 本进程直接读共享内存原始帧 → 编码为 JPEG |
+| SHM + YUV（`pixel_format=NV12/I420/YUYV422`） | 读到的原始帧是 YUV → 后端先 `cv2.cvtColor` 转 BGR → 再编码 JPEG |
+
+> 选 YUV 的目的是让**下游客户端**（如 Ascend DVPP）省掉色彩转换；Web 预览只是旁路取图，
+> 因此后端会自己转一次 BGR（多一次全图转换，预览分辨率建议配合 `max_width` 限制）。
 
 因此**预览 SHM 模式的流时，本进程必须与服务端在同一台机器**（同一 `/dev/shm`，容器需挂载 `-v /dev/shm:/dev/shm`）。
 跨机使用时请只用 gRPC JPEG 模式的流。
@@ -112,11 +116,15 @@ MJPEG 是“只进不出”的流式传输：**只要接收速度低于发送速
   "gpu_id": 0,
   "only_key_frames": false,
   "use_shared_mem": true,
+  "pixel_format": 1,
   "heartbeat_timeout_ms": 100000,
   "decode_interval_ms": 0,
   "keep_on_failure": false
 }
 ```
+
+> `pixel_format`（0=BGR24 1=NV12 2=I420 3=YUYV422）仅 `use_shared_mem=true` 时生效；
+> 页面上对应「原始帧格式 (SHM)」下拉框，留默认 BGR24 即为原有行为。
 
 交互式接口文档（FastAPI 自带）：<http://127.0.0.1:8080/docs>
 

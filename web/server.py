@@ -24,6 +24,7 @@ RTSP gRPC 服务端 Web 控制台（BFF 后端）
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import sys
 import threading
@@ -32,12 +33,15 @@ from collections import deque
 from typing import Deque, Dict, Iterator, List, Optional, Tuple
 
 import cv2
+import numpy as np
 import grpc
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("rtsp-web")
 
 # ---- 复用仓库里的 Python 客户端 -------------------------------------------------
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +53,11 @@ from remote_capture import (  # noqa: E402
     DECODER_GPU_NVCUVID,
     DECODER_HIK_SDK,
     DECODER_NAMES,
+    PIXEL_BGR,
+    PIXEL_I420,
+    PIXEL_NV12,
+    PIXEL_YUYV422,
+    PIXEL_FORMAT_NAMES,
     RTSPClient,
     STATUS_NOT_FOUND,
 )
@@ -131,10 +140,47 @@ def dedicated_client() -> Iterator[RTSPClient]:
 
 # ==================== 取帧 ====================
 
+def yuv_to_bgr(img: np.ndarray, pixel_format: int) -> Optional[np.ndarray]:
+    """把共享内存的 YUV 原始帧转成 BGR（预览/截图需要 BGR 才能编 JPEG）。
+
+    服务端在 SHM 模式下不产出 JPEG，若流配置为 YUV 格式（如 Ascend 常用的 NV12），
+    这里后端必须自己转一次，否则预览会报错或花屏。转换失败时返回 None。
+    """
+    if pixel_format == PIXEL_BGR:
+        return img
+    try:
+        if pixel_format == PIXEL_NV12:
+            return cv2.cvtColor(img, cv2.COLOR_YUV2BGR_NV12)
+        if pixel_format == PIXEL_I420:
+            return cv2.cvtColor(img, cv2.COLOR_YUV2BGR_I420)
+        if pixel_format == PIXEL_YUYV422:
+            # (H, W*2) 单通道 -> (H, W, 2) 双通道，OpenCV 的 YUYV 转换接受两种布局
+            return cv2.cvtColor(img.reshape(img.shape[0], img.shape[1] // 2, 2),
+                                cv2.COLOR_YUV2BGR_YUYV)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"YUV({PIXEL_FORMAT_NAMES.get(pixel_format, pixel_format)}) 转 BGR 失败: {e}")
+        return None
+    logger.warning(f"未知像素格式 {pixel_format}，无法转 BGR")
+    return None
+
+
+def frame_pixel_format(client: RTSPClient, stream_id: str) -> int:
+    """当前帧的像素格式：以刚读到的 SHM 元数据为准（旧桩/ gRPC 模式回退到 BGR）。"""
+    meta = client.get_last_frame_meta(stream_id)
+    if meta is None:
+        return PIXEL_BGR
+    return int(meta.get("pix_fmt", PIXEL_BGR))
+
+
 def grab_jpeg(client: RTSPClient, stream_id: str,
-              quality: int = 80, max_width: int = 0) -> Optional[bytes]:
+              quality: int = 80, max_width: int = 0, pixel_format: int = PIXEL_BGR) -> Optional[bytes]:
     """取一帧并编码为 JPEG（按流自身模式自动走 SHM 或 gRPC JPEG）"""
     _ts, img, _corrupted = client.read_ex(stream_id, blocking=False)
+    if img is None:
+        return None
+    # SHM 的 YUV 流需要先转 BGR
+    pix_fmt = pixel_format if pixel_format != PIXEL_BGR else frame_pixel_format(client, stream_id)
+    img = yuv_to_bgr(img, pix_fmt)
     if img is None:
         return None
     if max_width and img.shape[1] > max_width:
@@ -224,6 +270,9 @@ class StartStreamBody(BaseModel):
     gpu_id: int = Field(0, ge=0)
     only_key_frames: bool = False
     use_shared_mem: bool = False
+    # 共享内存原始帧的像素格式：0=BGR24 1=NV12 2=I420 3=YUYV422
+    # （仅 use_shared_mem=true 时生效；gRPC 通道始终返回 JPEG）
+    pixel_format: int = Field(PIXEL_BGR, ge=0, le=3)
     heartbeat_timeout_ms: int = Field(100000, ge=1, le=3600000)
     decode_interval_ms: int = Field(0, ge=0)
     keep_on_failure: bool = False
@@ -237,13 +286,21 @@ class UpdateUrlBody(BaseModel):
 
 @app.get("/api/meta")
 def api_meta():
-    """前端初始化用：服务端地址、解码器枚举、状态名"""
+    """前端初始化用：服务端地址、解码器/像素格式枚举、状态名"""
     return {
         "server": SERVER_ADDR,
         "decoders": [
             {"value": DECODER_CPU_FFMPEG, "label": DECODER_NAMES.get(DECODER_CPU_FFMPEG, "CPU")},
             {"value": DECODER_GPU_NVCUVID, "label": DECODER_NAMES.get(DECODER_GPU_NVCUVID, "GPU")},
             {"value": DECODER_HIK_SDK, "label": DECODER_NAMES.get(DECODER_HIK_SDK, "HIK")},
+        ],
+        # 仅 SHM 模式生效的原始帧格式；选 YUV 可省掉客户端侧的色彩转换
+        # （例：Ascend DVPP 直接吃 NV12）
+        "pixel_formats": [
+            {"value": PIXEL_BGR, "label": "BGR24（默认，兼容 OpenCV）"},
+            {"value": PIXEL_NV12, "label": "NV12 / YUV420SP（Ascend DVPP 常用）"},
+            {"value": PIXEL_I420, "label": "I420 / YUV420P"},
+            {"value": PIXEL_YUYV422, "label": "YUYV422（packed 4:2:2）"},
         ],
     }
 
@@ -288,6 +345,7 @@ def api_start_stream(body: StartStreamBody):
             keep_on_failure=body.keep_on_failure,
             use_shared_mem=body.use_shared_mem,
             only_key_frames=body.only_key_frames,
+            pixel_format=body.pixel_format,
         )
     if not stream_id:
         raise HTTPException(status_code=400, detail="创建任务失败（请检查 RTSP URL 与解码器类型）")
@@ -333,7 +391,9 @@ def api_snapshot(stream_id: str,
         info = client.check_stream(stream_id)
         if not info or info.get("status") == STATUS_NOT_FOUND:
             raise HTTPException(status_code=404, detail=f"流不存在: {stream_id}")
-        jpeg = grab_jpeg(client, stream_id, quality=quality, max_width=max_width)
+        # SHM + YUV 的流需要后端先转 BGR 才能编 JPEG
+        pix_fmt = int(info.get("pixel_format", PIXEL_BGR)) if info.get("use_shared_mem") else PIXEL_BGR
+        jpeg = grab_jpeg(client, stream_id, quality=quality, max_width=max_width, pixel_format=pix_fmt)
     if jpeg is None:
         raise HTTPException(status_code=409, detail="暂时没有可用帧（流未连接或首帧尚未到达）")
     headers = {"Content-Disposition": f'inline; filename="{stream_id}.jpg"',
@@ -355,6 +415,15 @@ def api_mjpeg(stream_id: str,
         try:
             with dedicated_client() as client:
                 last_ts = -1
+                # SHM 流可能是 YUV（如 NV12），预览需要 BGR 才能编 JPEG。
+                # 以服务端上报的流配置为准（gRPC 流恒为 BGR）。
+                info = client.check_stream(stream_id) or {}
+                pix_fmt = int(info.get("pixel_format", PIXEL_BGR)) if info.get("use_shared_mem") else PIXEL_BGR
+                if pix_fmt != PIXEL_BGR:
+                    logger.info(
+                        f"预览流 {stream_id} 的 SHM 像素格式为 "
+                        f"{PIXEL_FORMAT_NAMES.get(pix_fmt, pix_fmt)}，后端将转 BGR 后编码 JPEG"
+                    )
                 idle_deadline = time.time() + FRAME_WAIT_MS / 1000.0
                 while True:
                     tick = time.monotonic()
@@ -369,6 +438,12 @@ def api_mjpeg(stream_id: str,
                     idle_sleep = 0.02
                     last_ts = ts
                     idle_deadline = time.time() + FRAME_WAIT_MS / 1000.0
+
+                    # YUV 帧（SHM）先转 BGR；也可根据元数据兜底修正（服务端版本差异）
+                    if pix_fmt != PIXEL_BGR:
+                        img = yuv_to_bgr(img, pix_fmt)
+                        if img is None:
+                            continue
                     if max_width and img.shape[1] > max_width:
                         scale = max_width / float(img.shape[1])
                         img = cv2.resize(img, (max_width, max(1, int(round(img.shape[0] * scale)))),

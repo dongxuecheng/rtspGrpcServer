@@ -104,6 +104,9 @@ int main(int argc, char **argv)
                 j["keep_on_failure"] = s.keep_on_failure();
                 j["only_key_frames"] = s.only_key_frames();
                 j["use_shared_mem"] = s.use_shared_mem();
+                // SHM 原始帧的像素格式（0=BGR24 1=NV12 2=I420 3=YUYV422）
+                j["pixel_format"] = s.pixel_format();
+                j["pixel_format_name"] = streamingservice::PixelFormat_Name(s.pixel_format());
                 streams.push_back(j);
             }
             result["streams"] = streams;

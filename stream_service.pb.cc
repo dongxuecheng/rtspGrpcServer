@@ -31,6 +31,7 @@ PROTOBUF_CONSTEXPR StartRequest::StartRequest(
   , /*decltype(_impl_.keep_on_failure_)*/false
   , /*decltype(_impl_.use_shared_mem_)*/false
   , /*decltype(_impl_.only_key_frames_)*/false
+  , /*decltype(_impl_.pixel_format_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct StartRequestDefaultTypeInternal {
   PROTOBUF_CONSTEXPR StartRequestDefaultTypeInternal()
@@ -116,6 +117,7 @@ PROTOBUF_CONSTEXPR FrameResponse::FrameResponse(
   , /*decltype(_impl_.message_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.frame_seq_)*/int64_t{0}
   , /*decltype(_impl_.success_)*/false
+  , /*decltype(_impl_.corrupted_)*/false
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct FrameResponseDefaultTypeInternal {
   PROTOBUF_CONSTEXPR FrameResponseDefaultTypeInternal()
@@ -150,6 +152,11 @@ PROTOBUF_CONSTEXPR StreamInfo::StreamInfo(
   , /*decltype(_impl_.keep_on_failure_)*/false
   , /*decltype(_impl_.only_key_frames_)*/false
   , /*decltype(_impl_.use_shared_mem_)*/false
+  , /*decltype(_impl_.media_lag_ms_)*/0
+  , /*decltype(_impl_.fps_)*/0
+  , /*decltype(_impl_.corrupted_frames_)*/uint64_t{0u}
+  , /*decltype(_impl_.glitch_ratio_)*/0
+  , /*decltype(_impl_.pixel_format_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct StreamInfoDefaultTypeInternal {
   PROTOBUF_CONSTEXPR StreamInfoDefaultTypeInternal()
@@ -229,9 +236,57 @@ struct UpdateStreamResponseDefaultTypeInternal {
   };
 };
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 UpdateStreamResponseDefaultTypeInternal _UpdateStreamResponse_default_instance_;
+PROTOBUF_CONSTEXPR ShmLayoutInfo::ShmLayoutInfo(
+    ::_pbi::ConstantInitialized): _impl_{
+    /*decltype(_impl_.slot_count_)*/uint64_t{0u}
+  , /*decltype(_impl_.max_frame_bytes_)*/uint64_t{0u}
+  , /*decltype(_impl_.alignment_)*/uint64_t{0u}
+  , /*decltype(_impl_.slot_size_)*/uint64_t{0u}
+  , /*decltype(_impl_.seq_offset_)*/uint64_t{0u}
+  , /*decltype(_impl_.meta_offset_)*/uint64_t{0u}
+  , /*decltype(_impl_.payload_offset_)*/uint64_t{0u}
+  , /*decltype(_impl_.meta_data_size_)*/uint64_t{0u}
+  , /*decltype(_impl_.head_idx_offset_)*/uint64_t{0u}
+  , /*decltype(_impl_.total_size_)*/uint64_t{0u}
+  , /*decltype(_impl_._cached_size_)*/{}} {}
+struct ShmLayoutInfoDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR ShmLayoutInfoDefaultTypeInternal()
+      : _instance(::_pbi::ConstantInitialized{}) {}
+  ~ShmLayoutInfoDefaultTypeInternal() {}
+  union {
+    ShmLayoutInfo _instance;
+  };
+};
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ShmLayoutInfoDefaultTypeInternal _ShmLayoutInfo_default_instance_;
+PROTOBUF_CONSTEXPR ShmLayoutRequest::ShmLayoutRequest(
+    ::_pbi::ConstantInitialized) {}
+struct ShmLayoutRequestDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR ShmLayoutRequestDefaultTypeInternal()
+      : _instance(::_pbi::ConstantInitialized{}) {}
+  ~ShmLayoutRequestDefaultTypeInternal() {}
+  union {
+    ShmLayoutRequest _instance;
+  };
+};
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ShmLayoutRequestDefaultTypeInternal _ShmLayoutRequest_default_instance_;
+PROTOBUF_CONSTEXPR ShmLayoutResponse::ShmLayoutResponse(
+    ::_pbi::ConstantInitialized): _impl_{
+    /*decltype(_impl_.message_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.layout_)*/nullptr
+  , /*decltype(_impl_.success_)*/false
+  , /*decltype(_impl_._cached_size_)*/{}} {}
+struct ShmLayoutResponseDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR ShmLayoutResponseDefaultTypeInternal()
+      : _instance(::_pbi::ConstantInitialized{}) {}
+  ~ShmLayoutResponseDefaultTypeInternal() {}
+  union {
+    ShmLayoutResponse _instance;
+  };
+};
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ShmLayoutResponseDefaultTypeInternal _ShmLayoutResponse_default_instance_;
 }  // namespace streamingservice
-static ::_pb::Metadata file_level_metadata_stream_5fservice_2eproto[14];
-static const ::_pb::EnumDescriptor* file_level_enum_descriptors_stream_5fservice_2eproto[2];
+static ::_pb::Metadata file_level_metadata_stream_5fservice_2eproto[17];
+static const ::_pb::EnumDescriptor* file_level_enum_descriptors_stream_5fservice_2eproto[3];
 static constexpr ::_pb::ServiceDescriptor const** file_level_service_descriptors_stream_5fservice_2eproto = nullptr;
 
 const uint32_t TableStruct_stream_5fservice_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
@@ -249,6 +304,7 @@ const uint32_t TableStruct_stream_5fservice_2eproto::offsets[] PROTOBUF_SECTION_
   PROTOBUF_FIELD_OFFSET(::streamingservice::StartRequest, _impl_.keep_on_failure_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::StartRequest, _impl_.use_shared_mem_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::StartRequest, _impl_.only_key_frames_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::StartRequest, _impl_.pixel_format_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::streamingservice::StartResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -298,6 +354,7 @@ const uint32_t TableStruct_stream_5fservice_2eproto::offsets[] PROTOBUF_SECTION_
   PROTOBUF_FIELD_OFFSET(::streamingservice::FrameResponse, _impl_.image_data_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::FrameResponse, _impl_.message_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::FrameResponse, _impl_.frame_seq_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::FrameResponse, _impl_.corrupted_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::streamingservice::ListStreamsRequest, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -321,6 +378,11 @@ const uint32_t TableStruct_stream_5fservice_2eproto::offsets[] PROTOBUF_SECTION_
   PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.keep_on_failure_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.only_key_frames_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.use_shared_mem_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.fps_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.media_lag_ms_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.corrupted_frames_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.glitch_ratio_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::StreamInfo, _impl_.pixel_format_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::streamingservice::CheckRequest, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -360,22 +422,56 @@ const uint32_t TableStruct_stream_5fservice_2eproto::offsets[] PROTOBUF_SECTION_
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::streamingservice::UpdateStreamResponse, _impl_.success_),
   PROTOBUF_FIELD_OFFSET(::streamingservice::UpdateStreamResponse, _impl_.message_),
+  ~0u,  // no _has_bits_
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _internal_metadata_),
+  ~0u,  // no _extensions_
+  ~0u,  // no _oneof_case_
+  ~0u,  // no _weak_field_map_
+  ~0u,  // no _inlined_string_donated_
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.slot_count_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.max_frame_bytes_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.alignment_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.slot_size_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.seq_offset_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.meta_offset_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.payload_offset_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.meta_data_size_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.head_idx_offset_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutInfo, _impl_.total_size_),
+  ~0u,  // no _has_bits_
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutRequest, _internal_metadata_),
+  ~0u,  // no _extensions_
+  ~0u,  // no _oneof_case_
+  ~0u,  // no _weak_field_map_
+  ~0u,  // no _inlined_string_donated_
+  ~0u,  // no _has_bits_
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutResponse, _internal_metadata_),
+  ~0u,  // no _extensions_
+  ~0u,  // no _oneof_case_
+  ~0u,  // no _weak_field_map_
+  ~0u,  // no _inlined_string_donated_
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutResponse, _impl_.success_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutResponse, _impl_.message_),
+  PROTOBUF_FIELD_OFFSET(::streamingservice::ShmLayoutResponse, _impl_.layout_),
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::streamingservice::StartRequest)},
-  { 14, -1, -1, sizeof(::streamingservice::StartResponse)},
-  { 23, -1, -1, sizeof(::streamingservice::StopRequest)},
-  { 30, -1, -1, sizeof(::streamingservice::StopResponse)},
-  { 38, -1, -1, sizeof(::streamingservice::FrameRequest)},
-  { 45, -1, -1, sizeof(::streamingservice::StreamRequest)},
-  { 53, -1, -1, sizeof(::streamingservice::FrameResponse)},
-  { 63, -1, -1, sizeof(::streamingservice::ListStreamsRequest)},
-  { 69, -1, -1, sizeof(::streamingservice::StreamInfo)},
-  { 86, -1, -1, sizeof(::streamingservice::CheckRequest)},
-  { 93, -1, -1, sizeof(::streamingservice::CheckResponse)},
-  { 101, -1, -1, sizeof(::streamingservice::ListStreamsResponse)},
-  { 109, -1, -1, sizeof(::streamingservice::UpdateStreamRequest)},
-  { 117, -1, -1, sizeof(::streamingservice::UpdateStreamResponse)},
+  { 15, -1, -1, sizeof(::streamingservice::StartResponse)},
+  { 24, -1, -1, sizeof(::streamingservice::StopRequest)},
+  { 31, -1, -1, sizeof(::streamingservice::StopResponse)},
+  { 39, -1, -1, sizeof(::streamingservice::FrameRequest)},
+  { 46, -1, -1, sizeof(::streamingservice::StreamRequest)},
+  { 54, -1, -1, sizeof(::streamingservice::FrameResponse)},
+  { 65, -1, -1, sizeof(::streamingservice::ListStreamsRequest)},
+  { 71, -1, -1, sizeof(::streamingservice::StreamInfo)},
+  { 93, -1, -1, sizeof(::streamingservice::CheckRequest)},
+  { 100, -1, -1, sizeof(::streamingservice::CheckResponse)},
+  { 108, -1, -1, sizeof(::streamingservice::ListStreamsResponse)},
+  { 116, -1, -1, sizeof(::streamingservice::UpdateStreamRequest)},
+  { 124, -1, -1, sizeof(::streamingservice::UpdateStreamResponse)},
+  { 132, -1, -1, sizeof(::streamingservice::ShmLayoutInfo)},
+  { 148, -1, -1, sizeof(::streamingservice::ShmLayoutRequest)},
+  { 154, -1, -1, sizeof(::streamingservice::ShmLayoutResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -393,67 +489,89 @@ static const ::_pb::Message* const file_default_instances[] = {
   &::streamingservice::_ListStreamsResponse_default_instance_._instance,
   &::streamingservice::_UpdateStreamRequest_default_instance_._instance,
   &::streamingservice::_UpdateStreamResponse_default_instance_._instance,
+  &::streamingservice::_ShmLayoutInfo_default_instance_._instance,
+  &::streamingservice::_ShmLayoutRequest_default_instance_._instance,
+  &::streamingservice::_ShmLayoutResponse_default_instance_._instance,
 };
 
 const char descriptor_table_protodef_stream_5fservice_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
   "\n\024stream_service.proto\022\020streamingservice"
-  "\"\351\001\n\014StartRequest\022\020\n\010rtsp_url\030\001 \001(\t\022\034\n\024h"
+  "\"\236\002\n\014StartRequest\022\020\n\010rtsp_url\030\001 \001(\t\022\034\n\024h"
   "eartbeat_timeout_ms\030\002 \001(\005\022\032\n\022decode_inte"
   "rval_ms\030\003 \001(\005\0223\n\014decoder_type\030\004 \001(\0162\035.st"
   "reamingservice.DecoderType\022\016\n\006gpu_id\030\005 \001"
   "(\005\022\027\n\017keep_on_failure\030\006 \001(\010\022\026\n\016use_share"
-  "d_mem\030\007 \001(\010\022\027\n\017only_key_frames\030\010 \001(\010\"D\n\r"
-  "StartResponse\022\017\n\007success\030\001 \001(\010\022\021\n\tstream"
-  "_id\030\002 \001(\t\022\017\n\007message\030\003 \001(\t\" \n\013StopReques"
-  "t\022\021\n\tstream_id\030\001 \001(\t\"0\n\014StopResponse\022\017\n\007"
-  "success\030\001 \001(\010\022\017\n\007message\030\002 \001(\t\"!\n\014FrameR"
-  "equest\022\021\n\tstream_id\030\001 \001(\t\"3\n\rStreamReque"
-  "st\022\021\n\tstream_id\030\001 \001(\t\022\017\n\007max_fps\030\002 \001(\005\"X"
-  "\n\rFrameResponse\022\017\n\007success\030\001 \001(\010\022\022\n\nimag"
-  "e_data\030\002 \001(\014\022\017\n\007message\030\003 \001(\t\022\021\n\tframe_s"
-  "eq\030\004 \001(\003\"\024\n\022ListStreamsRequest\"\271\002\n\nStrea"
-  "mInfo\022\021\n\tstream_id\030\001 \001(\t\022\020\n\010rtsp_url\030\002 \001"
-  "(\t\022.\n\006status\030\003 \001(\0162\036.streamingservice.St"
-  "reamStatus\0223\n\014decoder_type\030\004 \001(\0162\035.strea"
-  "mingservice.DecoderType\022\r\n\005width\030\005 \001(\005\022\016"
-  "\n\006height\030\006 \001(\005\022\032\n\022decode_interval_ms\030\007 \001"
-  "(\005\022\034\n\024heartbeat_timeout_ms\030\010 \001(\005\022\027\n\017keep"
-  "_on_failure\030\t \001(\010\022\027\n\017only_key_frames\030\n \001"
-  "(\010\022\026\n\016use_shared_mem\030\013 \001(\010\"!\n\014CheckReque"
-  "st\022\021\n\tstream_id\030\001 \001(\t\"N\n\rCheckResponse\022,"
-  "\n\006stream\030\001 \001(\0132\034.streamingservice.Stream"
-  "Info\022\017\n\007message\030\002 \001(\t\"Y\n\023ListStreamsResp"
-  "onse\022\023\n\013total_count\030\001 \001(\005\022-\n\007streams\030\002 \003"
-  "(\0132\034.streamingservice.StreamInfo\">\n\023Upda"
-  "teStreamRequest\022\021\n\tstream_id\030\001 \001(\t\022\024\n\014ne"
-  "w_rtsp_url\030\002 \001(\t\"8\n\024UpdateStreamResponse"
-  "\022\017\n\007success\030\001 \001(\010\022\017\n\007message\030\002 \001(\t*>\n\013De"
-  "coderType\022\026\n\022DECODER_CPU_FFMPEG\020\000\022\027\n\023DEC"
-  "ODER_GPU_NVCUVID\020\001*j\n\014StreamStatus\022\025\n\021ST"
-  "ATUS_CONNECTING\020\000\022\024\n\020STATUS_CONNECTED\020\001\022"
-  "\027\n\023STATUS_DISCONNECTED\020\002\022\024\n\020STATUS_NOT_F"
-  "OUND\020\0032\342\004\n\021RTSPStreamService\022N\n\013StartStr"
-  "eam\022\036.streamingservice.StartRequest\032\037.st"
-  "reamingservice.StartResponse\022K\n\nStopStre"
-  "am\022\035.streamingservice.StopRequest\032\036.stre"
-  "amingservice.StopResponse\022Q\n\016GetLatestFr"
-  "ame\022\036.streamingservice.FrameRequest\032\037.st"
-  "reamingservice.FrameResponse\022R\n\014StreamFr"
-  "ames\022\037.streamingservice.StreamRequest\032\037."
-  "streamingservice.FrameResponse0\001\022N\n\013Chec"
-  "kStream\022\036.streamingservice.CheckRequest\032"
-  "\037.streamingservice.CheckResponse\022Z\n\013List"
-  "Streams\022$.streamingservice.ListStreamsRe"
-  "quest\032%.streamingservice.ListStreamsResp"
-  "onse\022]\n\014UpdateStream\022%.streamingservice."
-  "UpdateStreamRequest\032&.streamingservice.U"
-  "pdateStreamResponseb\006proto3"
+  "d_mem\030\007 \001(\010\022\027\n\017only_key_frames\030\010 \001(\010\0223\n\014"
+  "pixel_format\030\t \001(\0162\035.streamingservice.Pi"
+  "xelFormat\"D\n\rStartResponse\022\017\n\007success\030\001 "
+  "\001(\010\022\021\n\tstream_id\030\002 \001(\t\022\017\n\007message\030\003 \001(\t\""
+  " \n\013StopRequest\022\021\n\tstream_id\030\001 \001(\t\"0\n\014Sto"
+  "pResponse\022\017\n\007success\030\001 \001(\010\022\017\n\007message\030\002 "
+  "\001(\t\"!\n\014FrameRequest\022\021\n\tstream_id\030\001 \001(\t\"3"
+  "\n\rStreamRequest\022\021\n\tstream_id\030\001 \001(\t\022\017\n\007ma"
+  "x_fps\030\002 \001(\005\"k\n\rFrameResponse\022\017\n\007success\030"
+  "\001 \001(\010\022\022\n\nimage_data\030\002 \001(\014\022\017\n\007message\030\003 \001"
+  "(\t\022\021\n\tframe_seq\030\004 \001(\003\022\021\n\tcorrupted\030\005 \001(\010"
+  "\"\024\n\022ListStreamsRequest\"\301\003\n\nStreamInfo\022\021\n"
+  "\tstream_id\030\001 \001(\t\022\020\n\010rtsp_url\030\002 \001(\t\022.\n\006st"
+  "atus\030\003 \001(\0162\036.streamingservice.StreamStat"
+  "us\0223\n\014decoder_type\030\004 \001(\0162\035.streamingserv"
+  "ice.DecoderType\022\r\n\005width\030\005 \001(\005\022\016\n\006height"
+  "\030\006 \001(\005\022\032\n\022decode_interval_ms\030\007 \001(\005\022\034\n\024he"
+  "artbeat_timeout_ms\030\010 \001(\005\022\027\n\017keep_on_fail"
+  "ure\030\t \001(\010\022\027\n\017only_key_frames\030\n \001(\010\022\026\n\016us"
+  "e_shared_mem\030\013 \001(\010\022\013\n\003fps\030\014 \001(\001\022\024\n\014media"
+  "_lag_ms\030\r \001(\005\022\030\n\020corrupted_frames\030\016 \001(\004\022"
+  "\024\n\014glitch_ratio\030\017 \001(\001\0223\n\014pixel_format\030\020 "
+  "\001(\0162\035.streamingservice.PixelFormat\"!\n\014Ch"
+  "eckRequest\022\021\n\tstream_id\030\001 \001(\t\"N\n\rCheckRe"
+  "sponse\022,\n\006stream\030\001 \001(\0132\034.streamingservic"
+  "e.StreamInfo\022\017\n\007message\030\002 \001(\t\"Y\n\023ListStr"
+  "eamsResponse\022\023\n\013total_count\030\001 \001(\005\022-\n\007str"
+  "eams\030\002 \003(\0132\034.streamingservice.StreamInfo"
+  "\">\n\023UpdateStreamRequest\022\021\n\tstream_id\030\001 \001"
+  "(\t\022\024\n\014new_rtsp_url\030\002 \001(\t\"8\n\024UpdateStream"
+  "Response\022\017\n\007success\030\001 \001(\010\022\017\n\007message\030\002 \001"
+  "(\t\"\350\001\n\rShmLayoutInfo\022\022\n\nslot_count\030\001 \001(\004"
+  "\022\027\n\017max_frame_bytes\030\002 \001(\004\022\021\n\talignment\030\003"
+  " \001(\004\022\021\n\tslot_size\030\004 \001(\004\022\022\n\nseq_offset\030\005 "
+  "\001(\004\022\023\n\013meta_offset\030\006 \001(\004\022\026\n\016payload_offs"
+  "et\030\007 \001(\004\022\026\n\016meta_data_size\030\010 \001(\004\022\027\n\017head"
+  "_idx_offset\030\t \001(\004\022\022\n\ntotal_size\030\n \001(\004\"\022\n"
+  "\020ShmLayoutRequest\"f\n\021ShmLayoutResponse\022\017"
+  "\n\007success\030\001 \001(\010\022\017\n\007message\030\002 \001(\t\022/\n\006layo"
+  "ut\030\003 \001(\0132\037.streamingservice.ShmLayoutInf"
+  "o*S\n\013DecoderType\022\026\n\022DECODER_CPU_FFMPEG\020\000"
+  "\022\027\n\023DECODER_GPU_NVCUVID\020\001\022\023\n\017DECODER_HIK"
+  "_SDK\020\002*j\n\014StreamStatus\022\025\n\021STATUS_CONNECT"
+  "ING\020\000\022\024\n\020STATUS_CONNECTED\020\001\022\027\n\023STATUS_DI"
+  "SCONNECTED\020\002\022\024\n\020STATUS_NOT_FOUND\020\003*O\n\013Pi"
+  "xelFormat\022\r\n\tPIXEL_BGR\020\000\022\016\n\nPIXEL_NV12\020\001"
+  "\022\016\n\nPIXEL_I420\020\002\022\021\n\rPIXEL_YUYV422\020\0032\273\005\n\021"
+  "RTSPStreamService\022N\n\013StartStream\022\036.strea"
+  "mingservice.StartRequest\032\037.streamingserv"
+  "ice.StartResponse\022K\n\nStopStream\022\035.stream"
+  "ingservice.StopRequest\032\036.streamingservic"
+  "e.StopResponse\022Q\n\016GetLatestFrame\022\036.strea"
+  "mingservice.FrameRequest\032\037.streamingserv"
+  "ice.FrameResponse\022R\n\014StreamFrames\022\037.stre"
+  "amingservice.StreamRequest\032\037.streamingse"
+  "rvice.FrameResponse0\001\022N\n\013CheckStream\022\036.s"
+  "treamingservice.CheckRequest\032\037.streaming"
+  "service.CheckResponse\022Z\n\013ListStreams\022$.s"
+  "treamingservice.ListStreamsRequest\032%.str"
+  "eamingservice.ListStreamsResponse\022]\n\014Upd"
+  "ateStream\022%.streamingservice.UpdateStrea"
+  "mRequest\032&.streamingservice.UpdateStream"
+  "Response\022W\n\014GetShmLayout\022\".streamingserv"
+  "ice.ShmLayoutRequest\032#.streamingservice."
+  "ShmLayoutResponseb\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_stream_5fservice_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_stream_5fservice_2eproto = {
-    false, false, 2067, descriptor_table_protodef_stream_5fservice_2eproto,
+    false, false, 2825, descriptor_table_protodef_stream_5fservice_2eproto,
     "stream_service.proto",
-    &descriptor_table_stream_5fservice_2eproto_once, nullptr, 0, 14,
+    &descriptor_table_stream_5fservice_2eproto_once, nullptr, 0, 17,
     schemas, file_default_instances, TableStruct_stream_5fservice_2eproto::offsets,
     file_level_metadata_stream_5fservice_2eproto, file_level_enum_descriptors_stream_5fservice_2eproto,
     file_level_service_descriptors_stream_5fservice_2eproto,
@@ -473,6 +591,7 @@ bool DecoderType_IsValid(int value) {
   switch (value) {
     case 0:
     case 1:
+    case 2:
       return true;
     default:
       return false;
@@ -484,6 +603,22 @@ const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* StreamStatus_descriptor() {
   return file_level_enum_descriptors_stream_5fservice_2eproto[1];
 }
 bool StreamStatus_IsValid(int value) {
+  switch (value) {
+    case 0:
+    case 1:
+    case 2:
+    case 3:
+      return true;
+    default:
+      return false;
+  }
+}
+
+const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* PixelFormat_descriptor() {
+  ::PROTOBUF_NAMESPACE_ID::internal::AssignDescriptors(&descriptor_table_stream_5fservice_2eproto);
+  return file_level_enum_descriptors_stream_5fservice_2eproto[2];
+}
+bool PixelFormat_IsValid(int value) {
   switch (value) {
     case 0:
     case 1:
@@ -520,6 +655,7 @@ StartRequest::StartRequest(const StartRequest& from)
     , decltype(_impl_.keep_on_failure_){}
     , decltype(_impl_.use_shared_mem_){}
     , decltype(_impl_.only_key_frames_){}
+    , decltype(_impl_.pixel_format_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -532,8 +668,8 @@ StartRequest::StartRequest(const StartRequest& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.heartbeat_timeout_ms_, &from._impl_.heartbeat_timeout_ms_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.only_key_frames_) -
-    reinterpret_cast<char*>(&_impl_.heartbeat_timeout_ms_)) + sizeof(_impl_.only_key_frames_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.pixel_format_) -
+    reinterpret_cast<char*>(&_impl_.heartbeat_timeout_ms_)) + sizeof(_impl_.pixel_format_));
   // @@protoc_insertion_point(copy_constructor:streamingservice.StartRequest)
 }
 
@@ -550,6 +686,7 @@ inline void StartRequest::SharedCtor(
     , decltype(_impl_.keep_on_failure_){false}
     , decltype(_impl_.use_shared_mem_){false}
     , decltype(_impl_.only_key_frames_){false}
+    , decltype(_impl_.pixel_format_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.rtsp_url_.InitDefault();
@@ -584,8 +721,8 @@ void StartRequest::Clear() {
 
   _impl_.rtsp_url_.ClearToEmpty();
   ::memset(&_impl_.heartbeat_timeout_ms_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.only_key_frames_) -
-      reinterpret_cast<char*>(&_impl_.heartbeat_timeout_ms_)) + sizeof(_impl_.only_key_frames_));
+      reinterpret_cast<char*>(&_impl_.pixel_format_) -
+      reinterpret_cast<char*>(&_impl_.heartbeat_timeout_ms_)) + sizeof(_impl_.pixel_format_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -659,6 +796,15 @@ const char* StartRequest::_InternalParse(const char* ptr, ::_pbi::ParseContext* 
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 64)) {
           _impl_.only_key_frames_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
           CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // .streamingservice.PixelFormat pixel_format = 9;
+      case 9:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 72)) {
+          uint64_t val = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+          _internal_set_pixel_format(static_cast<::streamingservice::PixelFormat>(val));
         } else
           goto handle_unusual;
         continue;
@@ -744,6 +890,13 @@ uint8_t* StartRequest::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteBoolToArray(8, this->_internal_only_key_frames(), target);
   }
 
+  // .streamingservice.PixelFormat pixel_format = 9;
+  if (this->_internal_pixel_format() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteEnumToArray(
+      9, this->_internal_pixel_format(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -803,6 +956,12 @@ size_t StartRequest::ByteSizeLong() const {
     total_size += 1 + 1;
   }
 
+  // .streamingservice.PixelFormat pixel_format = 9;
+  if (this->_internal_pixel_format() != 0) {
+    total_size += 1 +
+      ::_pbi::WireFormatLite::EnumSize(this->_internal_pixel_format());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -845,6 +1004,9 @@ void StartRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::P
   if (from._internal_only_key_frames() != 0) {
     _this->_internal_set_only_key_frames(from._internal_only_key_frames());
   }
+  if (from._internal_pixel_format() != 0) {
+    _this->_internal_set_pixel_format(from._internal_pixel_format());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -869,8 +1031,8 @@ void StartRequest::InternalSwap(StartRequest* other) {
       &other->_impl_.rtsp_url_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(StartRequest, _impl_.only_key_frames_)
-      + sizeof(StartRequest::_impl_.only_key_frames_)
+      PROTOBUF_FIELD_OFFSET(StartRequest, _impl_.pixel_format_)
+      + sizeof(StartRequest::_impl_.pixel_format_)
       - PROTOBUF_FIELD_OFFSET(StartRequest, _impl_.heartbeat_timeout_ms_)>(
           reinterpret_cast<char*>(&_impl_.heartbeat_timeout_ms_),
           reinterpret_cast<char*>(&other->_impl_.heartbeat_timeout_ms_));
@@ -2048,6 +2210,7 @@ FrameResponse::FrameResponse(const FrameResponse& from)
     , decltype(_impl_.message_){}
     , decltype(_impl_.frame_seq_){}
     , decltype(_impl_.success_){}
+    , decltype(_impl_.corrupted_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -2068,8 +2231,8 @@ FrameResponse::FrameResponse(const FrameResponse& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.frame_seq_, &from._impl_.frame_seq_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.success_) -
-    reinterpret_cast<char*>(&_impl_.frame_seq_)) + sizeof(_impl_.success_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.corrupted_) -
+    reinterpret_cast<char*>(&_impl_.frame_seq_)) + sizeof(_impl_.corrupted_));
   // @@protoc_insertion_point(copy_constructor:streamingservice.FrameResponse)
 }
 
@@ -2082,6 +2245,7 @@ inline void FrameResponse::SharedCtor(
     , decltype(_impl_.message_){}
     , decltype(_impl_.frame_seq_){int64_t{0}}
     , decltype(_impl_.success_){false}
+    , decltype(_impl_.corrupted_){false}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.image_data_.InitDefault();
@@ -2122,8 +2286,8 @@ void FrameResponse::Clear() {
   _impl_.image_data_.ClearToEmpty();
   _impl_.message_.ClearToEmpty();
   ::memset(&_impl_.frame_seq_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.success_) -
-      reinterpret_cast<char*>(&_impl_.frame_seq_)) + sizeof(_impl_.success_));
+      reinterpret_cast<char*>(&_impl_.corrupted_) -
+      reinterpret_cast<char*>(&_impl_.frame_seq_)) + sizeof(_impl_.corrupted_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -2164,6 +2328,14 @@ const char* FrameResponse::_InternalParse(const char* ptr, ::_pbi::ParseContext*
       case 4:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
           _impl_.frame_seq_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // bool corrupted = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
+          _impl_.corrupted_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -2225,6 +2397,12 @@ uint8_t* FrameResponse::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt64ToArray(4, this->_internal_frame_seq(), target);
   }
 
+  // bool corrupted = 5;
+  if (this->_internal_corrupted() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteBoolToArray(5, this->_internal_corrupted(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2265,6 +2443,11 @@ size_t FrameResponse::ByteSizeLong() const {
     total_size += 1 + 1;
   }
 
+  // bool corrupted = 5;
+  if (this->_internal_corrupted() != 0) {
+    total_size += 1 + 1;
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2295,6 +2478,9 @@ void FrameResponse::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::
   if (from._internal_success() != 0) {
     _this->_internal_set_success(from._internal_success());
   }
+  if (from._internal_corrupted() != 0) {
+    _this->_internal_set_corrupted(from._internal_corrupted());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -2323,8 +2509,8 @@ void FrameResponse::InternalSwap(FrameResponse* other) {
       &other->_impl_.message_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(FrameResponse, _impl_.success_)
-      + sizeof(FrameResponse::_impl_.success_)
+      PROTOBUF_FIELD_OFFSET(FrameResponse, _impl_.corrupted_)
+      + sizeof(FrameResponse::_impl_.corrupted_)
       - PROTOBUF_FIELD_OFFSET(FrameResponse, _impl_.frame_seq_)>(
           reinterpret_cast<char*>(&_impl_.frame_seq_),
           reinterpret_cast<char*>(&other->_impl_.frame_seq_));
@@ -2403,6 +2589,11 @@ StreamInfo::StreamInfo(const StreamInfo& from)
     , decltype(_impl_.keep_on_failure_){}
     , decltype(_impl_.only_key_frames_){}
     , decltype(_impl_.use_shared_mem_){}
+    , decltype(_impl_.media_lag_ms_){}
+    , decltype(_impl_.fps_){}
+    , decltype(_impl_.corrupted_frames_){}
+    , decltype(_impl_.glitch_ratio_){}
+    , decltype(_impl_.pixel_format_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -2423,8 +2614,8 @@ StreamInfo::StreamInfo(const StreamInfo& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.status_, &from._impl_.status_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.use_shared_mem_) -
-    reinterpret_cast<char*>(&_impl_.status_)) + sizeof(_impl_.use_shared_mem_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.pixel_format_) -
+    reinterpret_cast<char*>(&_impl_.status_)) + sizeof(_impl_.pixel_format_));
   // @@protoc_insertion_point(copy_constructor:streamingservice.StreamInfo)
 }
 
@@ -2444,6 +2635,11 @@ inline void StreamInfo::SharedCtor(
     , decltype(_impl_.keep_on_failure_){false}
     , decltype(_impl_.only_key_frames_){false}
     , decltype(_impl_.use_shared_mem_){false}
+    , decltype(_impl_.media_lag_ms_){0}
+    , decltype(_impl_.fps_){0}
+    , decltype(_impl_.corrupted_frames_){uint64_t{0u}}
+    , decltype(_impl_.glitch_ratio_){0}
+    , decltype(_impl_.pixel_format_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.stream_id_.InitDefault();
@@ -2484,8 +2680,8 @@ void StreamInfo::Clear() {
   _impl_.stream_id_.ClearToEmpty();
   _impl_.rtsp_url_.ClearToEmpty();
   ::memset(&_impl_.status_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.use_shared_mem_) -
-      reinterpret_cast<char*>(&_impl_.status_)) + sizeof(_impl_.use_shared_mem_));
+      reinterpret_cast<char*>(&_impl_.pixel_format_) -
+      reinterpret_cast<char*>(&_impl_.status_)) + sizeof(_impl_.pixel_format_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -2586,6 +2782,47 @@ const char* StreamInfo::_InternalParse(const char* ptr, ::_pbi::ParseContext* ct
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 88)) {
           _impl_.use_shared_mem_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
           CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // double fps = 12;
+      case 12:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 97)) {
+          _impl_.fps_ = ::PROTOBUF_NAMESPACE_ID::internal::UnalignedLoad<double>(ptr);
+          ptr += sizeof(double);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 media_lag_ms = 13;
+      case 13:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 104)) {
+          _impl_.media_lag_ms_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 corrupted_frames = 14;
+      case 14:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 112)) {
+          _impl_.corrupted_frames_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // double glitch_ratio = 15;
+      case 15:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 121)) {
+          _impl_.glitch_ratio_ = ::PROTOBUF_NAMESPACE_ID::internal::UnalignedLoad<double>(ptr);
+          ptr += sizeof(double);
+        } else
+          goto handle_unusual;
+        continue;
+      // .streamingservice.PixelFormat pixel_format = 16;
+      case 16:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 128)) {
+          uint64_t val = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+          _internal_set_pixel_format(static_cast<::streamingservice::PixelFormat>(val));
         } else
           goto handle_unusual;
         continue;
@@ -2694,6 +2931,45 @@ uint8_t* StreamInfo::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteBoolToArray(11, this->_internal_use_shared_mem(), target);
   }
 
+  // double fps = 12;
+  static_assert(sizeof(uint64_t) == sizeof(double), "Code assumes uint64_t and double are the same size.");
+  double tmp_fps = this->_internal_fps();
+  uint64_t raw_fps;
+  memcpy(&raw_fps, &tmp_fps, sizeof(tmp_fps));
+  if (raw_fps != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteDoubleToArray(12, this->_internal_fps(), target);
+  }
+
+  // int32 media_lag_ms = 13;
+  if (this->_internal_media_lag_ms() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(13, this->_internal_media_lag_ms(), target);
+  }
+
+  // uint64 corrupted_frames = 14;
+  if (this->_internal_corrupted_frames() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(14, this->_internal_corrupted_frames(), target);
+  }
+
+  // double glitch_ratio = 15;
+  static_assert(sizeof(uint64_t) == sizeof(double), "Code assumes uint64_t and double are the same size.");
+  double tmp_glitch_ratio = this->_internal_glitch_ratio();
+  uint64_t raw_glitch_ratio;
+  memcpy(&raw_glitch_ratio, &tmp_glitch_ratio, sizeof(tmp_glitch_ratio));
+  if (raw_glitch_ratio != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteDoubleToArray(15, this->_internal_glitch_ratio(), target);
+  }
+
+  // .streamingservice.PixelFormat pixel_format = 16;
+  if (this->_internal_pixel_format() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteEnumToArray(
+      16, this->_internal_pixel_format(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2771,6 +3047,40 @@ size_t StreamInfo::ByteSizeLong() const {
     total_size += 1 + 1;
   }
 
+  // int32 media_lag_ms = 13;
+  if (this->_internal_media_lag_ms() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_media_lag_ms());
+  }
+
+  // double fps = 12;
+  static_assert(sizeof(uint64_t) == sizeof(double), "Code assumes uint64_t and double are the same size.");
+  double tmp_fps = this->_internal_fps();
+  uint64_t raw_fps;
+  memcpy(&raw_fps, &tmp_fps, sizeof(tmp_fps));
+  if (raw_fps != 0) {
+    total_size += 1 + 8;
+  }
+
+  // uint64 corrupted_frames = 14;
+  if (this->_internal_corrupted_frames() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_corrupted_frames());
+  }
+
+  // double glitch_ratio = 15;
+  static_assert(sizeof(uint64_t) == sizeof(double), "Code assumes uint64_t and double are the same size.");
+  double tmp_glitch_ratio = this->_internal_glitch_ratio();
+  uint64_t raw_glitch_ratio;
+  memcpy(&raw_glitch_ratio, &tmp_glitch_ratio, sizeof(tmp_glitch_ratio));
+  if (raw_glitch_ratio != 0) {
+    total_size += 1 + 8;
+  }
+
+  // .streamingservice.PixelFormat pixel_format = 16;
+  if (this->_internal_pixel_format() != 0) {
+    total_size += 2 +
+      ::_pbi::WireFormatLite::EnumSize(this->_internal_pixel_format());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2822,6 +3132,29 @@ void StreamInfo::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PRO
   if (from._internal_use_shared_mem() != 0) {
     _this->_internal_set_use_shared_mem(from._internal_use_shared_mem());
   }
+  if (from._internal_media_lag_ms() != 0) {
+    _this->_internal_set_media_lag_ms(from._internal_media_lag_ms());
+  }
+  static_assert(sizeof(uint64_t) == sizeof(double), "Code assumes uint64_t and double are the same size.");
+  double tmp_fps = from._internal_fps();
+  uint64_t raw_fps;
+  memcpy(&raw_fps, &tmp_fps, sizeof(tmp_fps));
+  if (raw_fps != 0) {
+    _this->_internal_set_fps(from._internal_fps());
+  }
+  if (from._internal_corrupted_frames() != 0) {
+    _this->_internal_set_corrupted_frames(from._internal_corrupted_frames());
+  }
+  static_assert(sizeof(uint64_t) == sizeof(double), "Code assumes uint64_t and double are the same size.");
+  double tmp_glitch_ratio = from._internal_glitch_ratio();
+  uint64_t raw_glitch_ratio;
+  memcpy(&raw_glitch_ratio, &tmp_glitch_ratio, sizeof(tmp_glitch_ratio));
+  if (raw_glitch_ratio != 0) {
+    _this->_internal_set_glitch_ratio(from._internal_glitch_ratio());
+  }
+  if (from._internal_pixel_format() != 0) {
+    _this->_internal_set_pixel_format(from._internal_pixel_format());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -2850,8 +3183,8 @@ void StreamInfo::InternalSwap(StreamInfo* other) {
       &other->_impl_.rtsp_url_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(StreamInfo, _impl_.use_shared_mem_)
-      + sizeof(StreamInfo::_impl_.use_shared_mem_)
+      PROTOBUF_FIELD_OFFSET(StreamInfo, _impl_.pixel_format_)
+      + sizeof(StreamInfo::_impl_.pixel_format_)
       - PROTOBUF_FIELD_OFFSET(StreamInfo, _impl_.status_)>(
           reinterpret_cast<char*>(&_impl_.status_),
           reinterpret_cast<char*>(&other->_impl_.status_));
@@ -4006,6 +4339,725 @@ void UpdateStreamResponse::InternalSwap(UpdateStreamResponse* other) {
       file_level_metadata_stream_5fservice_2eproto[13]);
 }
 
+// ===================================================================
+
+class ShmLayoutInfo::_Internal {
+ public:
+};
+
+ShmLayoutInfo::ShmLayoutInfo(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                         bool is_message_owned)
+  : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
+  SharedCtor(arena, is_message_owned);
+  // @@protoc_insertion_point(arena_constructor:streamingservice.ShmLayoutInfo)
+}
+ShmLayoutInfo::ShmLayoutInfo(const ShmLayoutInfo& from)
+  : ::PROTOBUF_NAMESPACE_ID::Message() {
+  ShmLayoutInfo* const _this = this; (void)_this;
+  new (&_impl_) Impl_{
+      decltype(_impl_.slot_count_){}
+    , decltype(_impl_.max_frame_bytes_){}
+    , decltype(_impl_.alignment_){}
+    , decltype(_impl_.slot_size_){}
+    , decltype(_impl_.seq_offset_){}
+    , decltype(_impl_.meta_offset_){}
+    , decltype(_impl_.payload_offset_){}
+    , decltype(_impl_.meta_data_size_){}
+    , decltype(_impl_.head_idx_offset_){}
+    , decltype(_impl_.total_size_){}
+    , /*decltype(_impl_._cached_size_)*/{}};
+
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  ::memcpy(&_impl_.slot_count_, &from._impl_.slot_count_,
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.total_size_) -
+    reinterpret_cast<char*>(&_impl_.slot_count_)) + sizeof(_impl_.total_size_));
+  // @@protoc_insertion_point(copy_constructor:streamingservice.ShmLayoutInfo)
+}
+
+inline void ShmLayoutInfo::SharedCtor(
+    ::_pb::Arena* arena, bool is_message_owned) {
+  (void)arena;
+  (void)is_message_owned;
+  new (&_impl_) Impl_{
+      decltype(_impl_.slot_count_){uint64_t{0u}}
+    , decltype(_impl_.max_frame_bytes_){uint64_t{0u}}
+    , decltype(_impl_.alignment_){uint64_t{0u}}
+    , decltype(_impl_.slot_size_){uint64_t{0u}}
+    , decltype(_impl_.seq_offset_){uint64_t{0u}}
+    , decltype(_impl_.meta_offset_){uint64_t{0u}}
+    , decltype(_impl_.payload_offset_){uint64_t{0u}}
+    , decltype(_impl_.meta_data_size_){uint64_t{0u}}
+    , decltype(_impl_.head_idx_offset_){uint64_t{0u}}
+    , decltype(_impl_.total_size_){uint64_t{0u}}
+    , /*decltype(_impl_._cached_size_)*/{}
+  };
+}
+
+ShmLayoutInfo::~ShmLayoutInfo() {
+  // @@protoc_insertion_point(destructor:streamingservice.ShmLayoutInfo)
+  if (auto *arena = _internal_metadata_.DeleteReturnArena<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>()) {
+  (void)arena;
+    return;
+  }
+  SharedDtor();
+}
+
+inline void ShmLayoutInfo::SharedDtor() {
+  GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+}
+
+void ShmLayoutInfo::SetCachedSize(int size) const {
+  _impl_._cached_size_.Set(size);
+}
+
+void ShmLayoutInfo::Clear() {
+// @@protoc_insertion_point(message_clear_start:streamingservice.ShmLayoutInfo)
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  ::memset(&_impl_.slot_count_, 0, static_cast<size_t>(
+      reinterpret_cast<char*>(&_impl_.total_size_) -
+      reinterpret_cast<char*>(&_impl_.slot_count_)) + sizeof(_impl_.total_size_));
+  _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+const char* ShmLayoutInfo::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) {
+#define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
+  while (!ctx->Done(&ptr)) {
+    uint32_t tag;
+    ptr = ::_pbi::ReadTag(ptr, &tag);
+    switch (tag >> 3) {
+      // uint64 slot_count = 1;
+      case 1:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 8)) {
+          _impl_.slot_count_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 max_frame_bytes = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 16)) {
+          _impl_.max_frame_bytes_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 alignment = 3;
+      case 3:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
+          _impl_.alignment_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 slot_size = 4;
+      case 4:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
+          _impl_.slot_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 seq_offset = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
+          _impl_.seq_offset_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 meta_offset = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
+          _impl_.meta_offset_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 payload_offset = 7;
+      case 7:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 56)) {
+          _impl_.payload_offset_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 meta_data_size = 8;
+      case 8:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 64)) {
+          _impl_.meta_data_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 head_idx_offset = 9;
+      case 9:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 72)) {
+          _impl_.head_idx_offset_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // uint64 total_size = 10;
+      case 10:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 80)) {
+          _impl_.total_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      default:
+        goto handle_unusual;
+    }  // switch
+  handle_unusual:
+    if ((tag == 0) || ((tag & 7) == 4)) {
+      CHK_(ptr);
+      ctx->SetLastTag(tag);
+      goto message_done;
+    }
+    ptr = UnknownFieldParse(
+        tag,
+        _internal_metadata_.mutable_unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(),
+        ptr, ctx);
+    CHK_(ptr != nullptr);
+  }  // while
+message_done:
+  return ptr;
+failure:
+  ptr = nullptr;
+  goto message_done;
+#undef CHK_
+}
+
+uint8_t* ShmLayoutInfo::_InternalSerialize(
+    uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:streamingservice.ShmLayoutInfo)
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  // uint64 slot_count = 1;
+  if (this->_internal_slot_count() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(1, this->_internal_slot_count(), target);
+  }
+
+  // uint64 max_frame_bytes = 2;
+  if (this->_internal_max_frame_bytes() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(2, this->_internal_max_frame_bytes(), target);
+  }
+
+  // uint64 alignment = 3;
+  if (this->_internal_alignment() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(3, this->_internal_alignment(), target);
+  }
+
+  // uint64 slot_size = 4;
+  if (this->_internal_slot_size() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(4, this->_internal_slot_size(), target);
+  }
+
+  // uint64 seq_offset = 5;
+  if (this->_internal_seq_offset() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(5, this->_internal_seq_offset(), target);
+  }
+
+  // uint64 meta_offset = 6;
+  if (this->_internal_meta_offset() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(6, this->_internal_meta_offset(), target);
+  }
+
+  // uint64 payload_offset = 7;
+  if (this->_internal_payload_offset() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(7, this->_internal_payload_offset(), target);
+  }
+
+  // uint64 meta_data_size = 8;
+  if (this->_internal_meta_data_size() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(8, this->_internal_meta_data_size(), target);
+  }
+
+  // uint64 head_idx_offset = 9;
+  if (this->_internal_head_idx_offset() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(9, this->_internal_head_idx_offset(), target);
+  }
+
+  // uint64 total_size = 10;
+  if (this->_internal_total_size() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteUInt64ToArray(10, this->_internal_total_size(), target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+        _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:streamingservice.ShmLayoutInfo)
+  return target;
+}
+
+size_t ShmLayoutInfo::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:streamingservice.ShmLayoutInfo)
+  size_t total_size = 0;
+
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  // uint64 slot_count = 1;
+  if (this->_internal_slot_count() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_slot_count());
+  }
+
+  // uint64 max_frame_bytes = 2;
+  if (this->_internal_max_frame_bytes() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_max_frame_bytes());
+  }
+
+  // uint64 alignment = 3;
+  if (this->_internal_alignment() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_alignment());
+  }
+
+  // uint64 slot_size = 4;
+  if (this->_internal_slot_size() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_slot_size());
+  }
+
+  // uint64 seq_offset = 5;
+  if (this->_internal_seq_offset() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_seq_offset());
+  }
+
+  // uint64 meta_offset = 6;
+  if (this->_internal_meta_offset() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_meta_offset());
+  }
+
+  // uint64 payload_offset = 7;
+  if (this->_internal_payload_offset() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_payload_offset());
+  }
+
+  // uint64 meta_data_size = 8;
+  if (this->_internal_meta_data_size() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_meta_data_size());
+  }
+
+  // uint64 head_idx_offset = 9;
+  if (this->_internal_head_idx_offset() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_head_idx_offset());
+  }
+
+  // uint64 total_size = 10;
+  if (this->_internal_total_size() != 0) {
+    total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_total_size());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
+
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData ShmLayoutInfo::_class_data_ = {
+    ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSourceCheck,
+    ShmLayoutInfo::MergeImpl
+};
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*ShmLayoutInfo::GetClassData() const { return &_class_data_; }
+
+
+void ShmLayoutInfo::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg) {
+  auto* const _this = static_cast<ShmLayoutInfo*>(&to_msg);
+  auto& from = static_cast<const ShmLayoutInfo&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:streamingservice.ShmLayoutInfo)
+  GOOGLE_DCHECK_NE(&from, _this);
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (from._internal_slot_count() != 0) {
+    _this->_internal_set_slot_count(from._internal_slot_count());
+  }
+  if (from._internal_max_frame_bytes() != 0) {
+    _this->_internal_set_max_frame_bytes(from._internal_max_frame_bytes());
+  }
+  if (from._internal_alignment() != 0) {
+    _this->_internal_set_alignment(from._internal_alignment());
+  }
+  if (from._internal_slot_size() != 0) {
+    _this->_internal_set_slot_size(from._internal_slot_size());
+  }
+  if (from._internal_seq_offset() != 0) {
+    _this->_internal_set_seq_offset(from._internal_seq_offset());
+  }
+  if (from._internal_meta_offset() != 0) {
+    _this->_internal_set_meta_offset(from._internal_meta_offset());
+  }
+  if (from._internal_payload_offset() != 0) {
+    _this->_internal_set_payload_offset(from._internal_payload_offset());
+  }
+  if (from._internal_meta_data_size() != 0) {
+    _this->_internal_set_meta_data_size(from._internal_meta_data_size());
+  }
+  if (from._internal_head_idx_offset() != 0) {
+    _this->_internal_set_head_idx_offset(from._internal_head_idx_offset());
+  }
+  if (from._internal_total_size() != 0) {
+    _this->_internal_set_total_size(from._internal_total_size());
+  }
+  _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void ShmLayoutInfo::CopyFrom(const ShmLayoutInfo& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:streamingservice.ShmLayoutInfo)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+bool ShmLayoutInfo::IsInitialized() const {
+  return true;
+}
+
+void ShmLayoutInfo::InternalSwap(ShmLayoutInfo* other) {
+  using std::swap;
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(ShmLayoutInfo, _impl_.total_size_)
+      + sizeof(ShmLayoutInfo::_impl_.total_size_)
+      - PROTOBUF_FIELD_OFFSET(ShmLayoutInfo, _impl_.slot_count_)>(
+          reinterpret_cast<char*>(&_impl_.slot_count_),
+          reinterpret_cast<char*>(&other->_impl_.slot_count_));
+}
+
+::PROTOBUF_NAMESPACE_ID::Metadata ShmLayoutInfo::GetMetadata() const {
+  return ::_pbi::AssignDescriptors(
+      &descriptor_table_stream_5fservice_2eproto_getter, &descriptor_table_stream_5fservice_2eproto_once,
+      file_level_metadata_stream_5fservice_2eproto[14]);
+}
+
+// ===================================================================
+
+class ShmLayoutRequest::_Internal {
+ public:
+};
+
+ShmLayoutRequest::ShmLayoutRequest(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                         bool is_message_owned)
+  : ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase(arena, is_message_owned) {
+  // @@protoc_insertion_point(arena_constructor:streamingservice.ShmLayoutRequest)
+}
+ShmLayoutRequest::ShmLayoutRequest(const ShmLayoutRequest& from)
+  : ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase() {
+  ShmLayoutRequest* const _this = this; (void)_this;
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  // @@protoc_insertion_point(copy_constructor:streamingservice.ShmLayoutRequest)
+}
+
+
+
+
+
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData ShmLayoutRequest::_class_data_ = {
+    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::CopyImpl,
+    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::MergeImpl,
+};
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*ShmLayoutRequest::GetClassData() const { return &_class_data_; }
+
+
+
+
+
+
+
+::PROTOBUF_NAMESPACE_ID::Metadata ShmLayoutRequest::GetMetadata() const {
+  return ::_pbi::AssignDescriptors(
+      &descriptor_table_stream_5fservice_2eproto_getter, &descriptor_table_stream_5fservice_2eproto_once,
+      file_level_metadata_stream_5fservice_2eproto[15]);
+}
+
+// ===================================================================
+
+class ShmLayoutResponse::_Internal {
+ public:
+  static const ::streamingservice::ShmLayoutInfo& layout(const ShmLayoutResponse* msg);
+};
+
+const ::streamingservice::ShmLayoutInfo&
+ShmLayoutResponse::_Internal::layout(const ShmLayoutResponse* msg) {
+  return *msg->_impl_.layout_;
+}
+ShmLayoutResponse::ShmLayoutResponse(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                         bool is_message_owned)
+  : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
+  SharedCtor(arena, is_message_owned);
+  // @@protoc_insertion_point(arena_constructor:streamingservice.ShmLayoutResponse)
+}
+ShmLayoutResponse::ShmLayoutResponse(const ShmLayoutResponse& from)
+  : ::PROTOBUF_NAMESPACE_ID::Message() {
+  ShmLayoutResponse* const _this = this; (void)_this;
+  new (&_impl_) Impl_{
+      decltype(_impl_.message_){}
+    , decltype(_impl_.layout_){nullptr}
+    , decltype(_impl_.success_){}
+    , /*decltype(_impl_._cached_size_)*/{}};
+
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  _impl_.message_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.message_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_message().empty()) {
+    _this->_impl_.message_.Set(from._internal_message(), 
+      _this->GetArenaForAllocation());
+  }
+  if (from._internal_has_layout()) {
+    _this->_impl_.layout_ = new ::streamingservice::ShmLayoutInfo(*from._impl_.layout_);
+  }
+  _this->_impl_.success_ = from._impl_.success_;
+  // @@protoc_insertion_point(copy_constructor:streamingservice.ShmLayoutResponse)
+}
+
+inline void ShmLayoutResponse::SharedCtor(
+    ::_pb::Arena* arena, bool is_message_owned) {
+  (void)arena;
+  (void)is_message_owned;
+  new (&_impl_) Impl_{
+      decltype(_impl_.message_){}
+    , decltype(_impl_.layout_){nullptr}
+    , decltype(_impl_.success_){false}
+    , /*decltype(_impl_._cached_size_)*/{}
+  };
+  _impl_.message_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.message_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+}
+
+ShmLayoutResponse::~ShmLayoutResponse() {
+  // @@protoc_insertion_point(destructor:streamingservice.ShmLayoutResponse)
+  if (auto *arena = _internal_metadata_.DeleteReturnArena<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>()) {
+  (void)arena;
+    return;
+  }
+  SharedDtor();
+}
+
+inline void ShmLayoutResponse::SharedDtor() {
+  GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+  _impl_.message_.Destroy();
+  if (this != internal_default_instance()) delete _impl_.layout_;
+}
+
+void ShmLayoutResponse::SetCachedSize(int size) const {
+  _impl_._cached_size_.Set(size);
+}
+
+void ShmLayoutResponse::Clear() {
+// @@protoc_insertion_point(message_clear_start:streamingservice.ShmLayoutResponse)
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  _impl_.message_.ClearToEmpty();
+  if (GetArenaForAllocation() == nullptr && _impl_.layout_ != nullptr) {
+    delete _impl_.layout_;
+  }
+  _impl_.layout_ = nullptr;
+  _impl_.success_ = false;
+  _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+const char* ShmLayoutResponse::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) {
+#define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
+  while (!ctx->Done(&ptr)) {
+    uint32_t tag;
+    ptr = ::_pbi::ReadTag(ptr, &tag);
+    switch (tag >> 3) {
+      // bool success = 1;
+      case 1:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 8)) {
+          _impl_.success_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // string message = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 18)) {
+          auto str = _internal_mutable_message();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "streamingservice.ShmLayoutResponse.message"));
+        } else
+          goto handle_unusual;
+        continue;
+      // .streamingservice.ShmLayoutInfo layout = 3;
+      case 3:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 26)) {
+          ptr = ctx->ParseMessage(_internal_mutable_layout(), ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      default:
+        goto handle_unusual;
+    }  // switch
+  handle_unusual:
+    if ((tag == 0) || ((tag & 7) == 4)) {
+      CHK_(ptr);
+      ctx->SetLastTag(tag);
+      goto message_done;
+    }
+    ptr = UnknownFieldParse(
+        tag,
+        _internal_metadata_.mutable_unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(),
+        ptr, ctx);
+    CHK_(ptr != nullptr);
+  }  // while
+message_done:
+  return ptr;
+failure:
+  ptr = nullptr;
+  goto message_done;
+#undef CHK_
+}
+
+uint8_t* ShmLayoutResponse::_InternalSerialize(
+    uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:streamingservice.ShmLayoutResponse)
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  // bool success = 1;
+  if (this->_internal_success() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteBoolToArray(1, this->_internal_success(), target);
+  }
+
+  // string message = 2;
+  if (!this->_internal_message().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_message().data(), static_cast<int>(this->_internal_message().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "streamingservice.ShmLayoutResponse.message");
+    target = stream->WriteStringMaybeAliased(
+        2, this->_internal_message(), target);
+  }
+
+  // .streamingservice.ShmLayoutInfo layout = 3;
+  if (this->_internal_has_layout()) {
+    target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::
+      InternalWriteMessage(3, _Internal::layout(this),
+        _Internal::layout(this).GetCachedSize(), target, stream);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+        _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:streamingservice.ShmLayoutResponse)
+  return target;
+}
+
+size_t ShmLayoutResponse::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:streamingservice.ShmLayoutResponse)
+  size_t total_size = 0;
+
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  // string message = 2;
+  if (!this->_internal_message().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_message());
+  }
+
+  // .streamingservice.ShmLayoutInfo layout = 3;
+  if (this->_internal_has_layout()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::MessageSize(
+        *_impl_.layout_);
+  }
+
+  // bool success = 1;
+  if (this->_internal_success() != 0) {
+    total_size += 1 + 1;
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
+
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData ShmLayoutResponse::_class_data_ = {
+    ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSourceCheck,
+    ShmLayoutResponse::MergeImpl
+};
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*ShmLayoutResponse::GetClassData() const { return &_class_data_; }
+
+
+void ShmLayoutResponse::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg) {
+  auto* const _this = static_cast<ShmLayoutResponse*>(&to_msg);
+  auto& from = static_cast<const ShmLayoutResponse&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:streamingservice.ShmLayoutResponse)
+  GOOGLE_DCHECK_NE(&from, _this);
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (!from._internal_message().empty()) {
+    _this->_internal_set_message(from._internal_message());
+  }
+  if (from._internal_has_layout()) {
+    _this->_internal_mutable_layout()->::streamingservice::ShmLayoutInfo::MergeFrom(
+        from._internal_layout());
+  }
+  if (from._internal_success() != 0) {
+    _this->_internal_set_success(from._internal_success());
+  }
+  _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void ShmLayoutResponse::CopyFrom(const ShmLayoutResponse& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:streamingservice.ShmLayoutResponse)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+bool ShmLayoutResponse::IsInitialized() const {
+  return true;
+}
+
+void ShmLayoutResponse::InternalSwap(ShmLayoutResponse* other) {
+  using std::swap;
+  auto* lhs_arena = GetArenaForAllocation();
+  auto* rhs_arena = other->GetArenaForAllocation();
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.message_, lhs_arena,
+      &other->_impl_.message_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(ShmLayoutResponse, _impl_.success_)
+      + sizeof(ShmLayoutResponse::_impl_.success_)
+      - PROTOBUF_FIELD_OFFSET(ShmLayoutResponse, _impl_.layout_)>(
+          reinterpret_cast<char*>(&_impl_.layout_),
+          reinterpret_cast<char*>(&other->_impl_.layout_));
+}
+
+::PROTOBUF_NAMESPACE_ID::Metadata ShmLayoutResponse::GetMetadata() const {
+  return ::_pbi::AssignDescriptors(
+      &descriptor_table_stream_5fservice_2eproto_getter, &descriptor_table_stream_5fservice_2eproto_once,
+      file_level_metadata_stream_5fservice_2eproto[16]);
+}
+
 // @@protoc_insertion_point(namespace_scope)
 }  // namespace streamingservice
 PROTOBUF_NAMESPACE_OPEN
@@ -4064,6 +5116,18 @@ Arena::CreateMaybeMessage< ::streamingservice::UpdateStreamRequest >(Arena* aren
 template<> PROTOBUF_NOINLINE ::streamingservice::UpdateStreamResponse*
 Arena::CreateMaybeMessage< ::streamingservice::UpdateStreamResponse >(Arena* arena) {
   return Arena::CreateMessageInternal< ::streamingservice::UpdateStreamResponse >(arena);
+}
+template<> PROTOBUF_NOINLINE ::streamingservice::ShmLayoutInfo*
+Arena::CreateMaybeMessage< ::streamingservice::ShmLayoutInfo >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::streamingservice::ShmLayoutInfo >(arena);
+}
+template<> PROTOBUF_NOINLINE ::streamingservice::ShmLayoutRequest*
+Arena::CreateMaybeMessage< ::streamingservice::ShmLayoutRequest >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::streamingservice::ShmLayoutRequest >(arena);
+}
+template<> PROTOBUF_NOINLINE ::streamingservice::ShmLayoutResponse*
+Arena::CreateMaybeMessage< ::streamingservice::ShmLayoutResponse >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::streamingservice::ShmLayoutResponse >(arena);
 }
 PROTOBUF_NAMESPACE_CLOSE
 

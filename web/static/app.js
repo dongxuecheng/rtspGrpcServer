@@ -238,6 +238,20 @@ async function loadMeta() {
       o.textContent = d.label;
       sel.appendChild(o);
     });
+
+    // 原始帧格式（仅 SHM 模式生效）；旧服务端可能不返回 pixel_formats，此时隐藏该项
+    const psel = $('#f-pixel');
+    if (psel) {
+      psel.textContent = '';
+      (meta.pixel_formats || []).forEach((p) => {
+        const o = document.createElement('option');
+        o.value = String(p.value);
+        o.textContent = p.label;
+        psel.appendChild(o);
+      });
+      const wrap = psel.closest('label');
+      if (wrap) wrap.style.display = (meta.pixel_formats && meta.pixel_formats.length) ? '' : 'none';
+    }
   } catch (e) {
     toast(`读取配置失败：${e.message}`, 'err');
   }
@@ -322,6 +336,11 @@ function renderStreams(streams) {
     const tdOpt = document.createElement('td');
     tdOpt.appendChild(tag(s.use_shared_mem ? 'SHM' : 'JPEG', s.use_shared_mem
       ? '共享内存零拷贝（需客户端与服务端同机）' : 'gRPC JPEG 传输'));
+    // SHM 流额外显示原始帧像素格式（NV12/I420/YUYV422；BGR24 是默认值不显示）
+    if (s.use_shared_mem && s.pixel_format_name && s.pixel_format_name !== 'BGR24') {
+      tdOpt.appendChild(tag(s.pixel_format_name,
+        `共享内存里的原始帧是 ${s.pixel_format_name}，客户端无需再从 BGR 转换（如 Ascend DVPP）。`, 'warn'));
+    }
     if (s.only_key_frames) tdOpt.appendChild(tag('仅关键帧'));
     if (s.keep_on_failure) tdOpt.appendChild(tag('失败保持'));
     if (s.decode_interval_ms > 0) tdOpt.appendChild(tag(`间隔 ${s.decode_interval_ms}ms`));
@@ -405,6 +424,7 @@ async function createStream(event) {
     decode_interval_ms: Number($('#f-interval').value || 0),
     only_key_frames: $('#f-keyframe').checked,
     use_shared_mem: $('#f-shm').checked,
+    pixel_format: Number($('#f-pixel') ? $('#f-pixel').value : 0),
     keep_on_failure: $('#f-keep').checked,
   };
   btn.disabled = true;

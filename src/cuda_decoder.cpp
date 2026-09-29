@@ -30,7 +30,9 @@ bool CudaDecoder::open(const std::string &url)
 
     // 2. 创建硬解码器
     // bUseDeviceFrame = true: 数据保留在 GPU，减少不必要的拷贝
-    // output_bgr = true: 在 GPU 上完成 NV12→BGR 转换
+    // output_bgr = true : 在 GPU 上完成 NV12→BGR 转换
+    // output_bgr = false: 直接输出 NV12（请求 NV12 时用，省掉色彩核）
+    const bool output_bgr = (output_pixel_format_ == static_cast<uint32_t>(PixelFormat::BGR));
     decoder_ = FFHDDecoder::create_cuvid_decoder(
         true, // bUseDeviceFrame = true
         FFHDDecoder::ffmpeg2NvCodecId(demuxer_->get_video_codec()),
@@ -39,7 +41,7 @@ bool CudaDecoder::open(const std::string &url)
         gpu_id_, // gpu_id
         nullptr,
         nullptr,
-        true); // output_bgr = true
+        output_bgr);
 
     if (!decoder_)
     {
@@ -47,6 +49,7 @@ bool CudaDecoder::open(const std::string &url)
         demuxer_.reset(); // 释放 demuxer
         return false;
     }
+    spdlog::info("[CudaDecoder] NVDEC output format: {}", output_bgr ? "BGR24" : "NV12(native)");
 
     // 记录 decoder 创建时间，用于 grab() 判断首帧阶段，避免空包/no-frame 过早失败。
     open_time_ = std::chrono::steady_clock::now();
@@ -185,11 +188,31 @@ bool CudaDecoder::retrieve(cv::Mat &frame, bool need_data)
         //              width, height, frame_bytes, width * height * 3);
 
         // 使用解码器报告的实际大小
-        frame.create(height, width, CV_8UC3);
+        // NVDEC 在 output_bgr=false 时输出紧密排列的 NV12（pitch == width），
+        // 因此这里按“图像宽高”分配对应形状的缓冲，行数与图像高度不一定相等。
+        if (output_pixel_format_ == static_cast<uint32_t>(PixelFormat::NV12))
+        {
+            const int chroma_h = (height + 1) / 2;
+            frame.create(height + chroma_h, width, CV_8UC1);
+        }
+        else
+        {
+            frame.create(height, width, CV_8UC3);
+        }
+
+        // 防御：解码器报告的字节数与目标缓冲不一致时不要越界写
+        const size_t dst_bytes = frame.total() * frame.elemSize();
+        const size_t copy_bytes = std::min<size_t>(static_cast<size_t>(frame_bytes), dst_bytes);
+        if (static_cast<size_t>(frame_bytes) != dst_bytes)
+        {
+            spdlog::warn("[CudaDecoder] frame_bytes {} != buffer bytes {} (fmt={}) for {}x{}",
+                         frame_bytes, dst_bytes, pixelFormatName(output_pixel_format_), width, height);
+        }
+
         cudaError_t err;
         if (cuda_stream_)
         {
-            err = cudaMemcpyAsync(frame.data, gpu_ptr, frame_bytes, cudaMemcpyDeviceToHost, cuda_stream_);
+            err = cudaMemcpyAsync(frame.data, gpu_ptr, copy_bytes, cudaMemcpyDeviceToHost, cuda_stream_);
             if (err != cudaSuccess)
             {
                 spdlog::error("cudaMemcpyAsync failed: {}", cudaGetErrorString(err));
@@ -200,7 +223,7 @@ bool CudaDecoder::retrieve(cv::Mat &frame, bool need_data)
         }
         else
         {
-            err = cudaMemcpy(frame.data, gpu_ptr, frame_bytes, cudaMemcpyDeviceToHost);
+            err = cudaMemcpy(frame.data, gpu_ptr, copy_bytes, cudaMemcpyDeviceToHost);
             if (err != cudaSuccess)
             {
                 spdlog::error("cudaMemcpy failed: {}", cudaGetErrorString(err));
@@ -213,6 +236,28 @@ bool CudaDecoder::retrieve(cv::Mat &frame, bool need_data)
 
     decoded_frames_available_--;
     return true;
+}
+
+// 原生 NV12 路径：解码器以 output_bgr=false 创建时，get_frame() 返回的就是 NV12，
+// 只需一次 D2H 拷贝，不做任何色彩转换。
+// 其他格式（I420/YUYV422/BGR）或解码器按 BGR 创建时退回通用实现（BGR→YUV）。
+bool CudaDecoder::retrieveRaw(RawFrame &out, uint32_t pixel_format)
+{
+    const uint32_t nv12 = static_cast<uint32_t>(PixelFormat::NV12);
+    if (pixel_format != nv12 || output_pixel_format_ != nv12)
+    {
+        return IVideoDecoder::retrieveRaw(out, pixel_format);
+    }
+
+    out.release();
+    if (!retrieve(out.buffer, true) || out.buffer.empty())
+        return false;
+
+    out.width = decoder_ ? decoder_->get_width() : 0;
+    out.height = decoder_ ? decoder_->get_height() : 0;
+    out.step = static_cast<uint32_t>(out.width); // 紧密排列：NV12 的 Y 平面行字节数 = 宽度
+    out.pixel_format = pixel_format;
+    return out.width > 0 && out.height > 0;
 }
 
 int CudaDecoder::getWidth() const

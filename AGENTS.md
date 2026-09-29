@@ -74,6 +74,7 @@ rtspGrpcServer/
 │   ├── opencv_encoder.hpp     # CPU JPEG 编码器
 │   ├── cuda_tools.hpp         # CUDA 错误检查宏、AutoDevice RAII
 │   ├── frame_memory_pool.hpp  # std::string 帧缓冲区对象池
+│   ├── pixel_format.hpp       # 原始帧像素格式（BGR24/NV12/I420/YUYV422）与布局工具
 │   ├── zero_copy_channel.hpp  # POSIX 共享内存通道（生产者/消费者）
 │   ├── task_scheduler.hpp     # 单例调度器：每 GPU 懒加载 ThreadPool + CPU 池
 │   ├── thread_pool.hpp        # 经典 std::thread + queue 线程池
@@ -352,6 +353,13 @@ python example.py [编号]      # 编号 1-10，或 all 顺序运行全部
   - 像素域检测（灰块率、块效应、帧间差）只在解码器不报错但画面确有伪影时才需要，且夜间红外切黑白/低照度/纯色场景会大量误报，慎用。
 - **proto 文件同步**：`stream_service.proto` 在根目录和 `client/` 下各有一份。修改后需要同时更新，并重新生成 C++ 和 Python 的 protobuf/gRPC 代码。
 - **共享内存布局一致性**：C++ 端 `include/zero_copy_channel.hpp` 中的 `ShmMeta` **带 `alignas(64)`**，因此真实布局是：`sequence@0`、`meta@64`（不是 8）、`sizeof(ShmMeta)=64`（不是 48）、**payload@128**（不是 56）、`sizeof(ShmFrameSlot)=128`；`static_assert` 已把这些值固化。**消费端一律不要硬编码这些偏移**，应使用 `GetShmLayout` 返回的偏移（C++ 用 `offsetof/sizeof` 算）：Python 客户端 `_ShmReader` 优先取服务端偏移（兜底常量仅为兼容旧桩），C++ 工具见 `tools/save_frames.cpp`。历史上就因为头文件里一行过时注释（`// 48 bytes, offset 8`）导致 Python 硬编码错偏移，所有帧被当成 `size==0` 丢弃（表现为“能连上但 0 帧”）。
+- **ShmMeta 内部字段顺序也是约定**：`QQQQIIIII` = 4×u64（actual_size/width/height/timestamp）+ 5×u32（channels/depth/step/frame_flags/**pixel_format**）= 52 字节（`sizeof=64`，剩下 12 字节尾部填充）。`pixel_format@48` 就落在原来的填充区里，所以**新增字段只能往这块填充里放**；一旦改动顺序或大小，`client/remote_capture.py::_read_meta`（`struct.unpack("QQQQIIIII")`）与 `tools/save_frames.cpp` 的 `ShmMeta` 副本必须同步，`static_assert` 会拦截。
+- **原始帧像素格式（BGR / YUV）**：`StartRequest.pixel_format`（`PixelFormat`：0=BGR24 1=NV12 2=I420 3=YUYV422）**仅对 SHM 通道生效**（gRPC 恒为 JPEG，非 SHM 时服务端忽略该值并回退 BGR）。格式在 `StartStream` 时固定，随 `StreamInfo.pixel_format` 回报。
+  - 产出路径：`IVideoDecoder::retrieveRaw(RawFrame&, fmt)`；默认实现是 `retrieve()` 拿 BGR 后 `cvtColor` 回退（海康抓图、GPU 的非 NV12 格式走这里）。
+    `CpuDecoder` 覆写为 `sws_scale` **直出**目标格式（无 BGR 往返）；`CudaDecoder` 覆写为请求 NV12 时让 NVDEC 直出 NV12（`output_bgr=false`，跳过色彩核，只需 D2H 拷贝）。
+  - `setOutputPixelFormat()` 必须在 `decoder_->open()` **之前**调用（StreamTask 构造/`switchDecoder` 里做），因为 NVDEC 的输出格式在创建解码器时就定了。
+  - `RawFrame` 里 `buffer` 是紧密排列的缓冲，`width/height` 是**图像**宽高、`step` 是行字节数：NV12/I420 的 buffer 行数是 `H*3/2`，YUYV422 是 `(H, W, CV_8UC2)`。写 SHM 一律走 `write_frame_raw()`（`write_frame_mat()` 只是 BGR 包装），消费端靠 `meta.pixel_format` 解释布局。
+  - Python 端：`remote_capture.PIXEL_*` 常量 + `split_yuv_planes()`；SHM 的 YUV 帧返回 2-D uint8（NV12/I420 为 `(H*3/2, W)`，YUYV 为 `(H, W*2)`）。`web/server.py` 预览/截图前会用 `cv2.cvtColor(..., COLOR_YUV2BGR_NV12/I420/YUYV)` 先转 BGR（SHM 模式服务端不产 JPEG）。
 - **SHM 动态大小与运行中扩容**：`StreamTask::ensureShmChannel()` 在首帧解码后按实际帧大小创建 SHM（+25% 余量），帧变大（分辨率切换、`UpdateStream`）时会 `unlink` 旧对象并创建新对象（新的 inode）。因此**布局不能用 `GetShmLayout`（它只返回默认布局）**，消费端必须由 SHM 对象的实际文件大小反推（`total_size = 3 * slot_size + 8`，slot_size 为 64 的倍数）：Python 见 `derive_shm_layout_from_size()`，C++ 工具见 `tools/save_frames.cpp::deriveLayoutFromFileSize()`。由于旧映射在重建后会永久冻结在最后一帧，消费端还需在“一段时间没有新帧”后校验文件身份（`st_dev`/`st_ino`/大小）并重连：`_ShmReader._maybe_reconnect()` / `ShmReader::refreshIfStale()`；阻塞读必须分段等待信号量（`SHM_WAIT_SLICE_MS`），否则旧信号量等不到 `sem_post` 会卡死。
 - **客户端 keepalive 参数**：`client/remote_capture.py::_DEFAULT_CHANNEL_OPTIONS` **不能**开启 `keepalive_permit_without_calls`（或把 `keepalive_time_ms` 设得很小）。服务端用 gRPC 默认 ping 防洪策略（`min_recv_ping_interval_without_data=300s`、`max_ping_strikes=2`），空闲连接上频繁的 keepalive ping 会被 GOAWAY(`ENHANCE_YOUR_CALM "too many pings"`) 断开，表现为“空闲一会儿后 RPC 突然报 Too many pings”。另外 `connect()` 默认会等待 channel ready（3s），地址不可达时直接返回 False 并打印可操作提示，不再“假连接成功”。
 - **Web 控制台**：`web/server.py` 是 FastAPI BFF（REST + MJPEG），复用 `client/remote_capture.py`。服务端在 SHM 模式下不产出 JPEG，所以 SHM 流的预览由后端读共享内存再编码 JPEG，**要求后端与服务端同机**；跨机时只能用 gRPC JPEG 模式的流。控制类请求共用一个长连接（避免连接抖动），每个 MJPEG 预览会话用独立客户端。Web 端**不做鉴权**，默认监听 `0.0.0.0:8080`（`WEB_HOST`/`WEB_PORT` 可改）。

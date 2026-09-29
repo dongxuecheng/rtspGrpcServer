@@ -66,7 +66,8 @@ StreamTask::StreamTask(const std::string &url,
                        bool use_shared_mem,
                        std::unique_ptr<IVideoDecoder> decoder,
                        bool use_gpu_encoder,
-                       int jpeg_quality)
+                       int jpeg_quality,
+                       uint32_t pixel_format)
     : url_(url),
       stream_id_(stream_id),
       heartbeat_timeout_ms_(heartbeat_timeout_ms),
@@ -77,10 +78,25 @@ StreamTask::StreamTask(const std::string &url,
       saved_gpu_id_(gpu_id),
       keep_on_failure_(keep_on_failure),
       use_shared_mem_(use_shared_mem),
+      pixel_format_(pixel_format),
       decoder_(std::move(decoder)),
       use_gpu_encoder_(use_gpu_encoder),
       jpeg_quality_(jpeg_quality)
 {
+    // 非 SHM（gRPC/JPEG）模式不产出原始帧，强制 BGR，避免误配
+    if (!use_shared_mem_ && pixel_format_ != static_cast<uint32_t>(PixelFormat::BGR))
+    {
+        spdlog::warn("[StreamTask] pixel_format {} ignored for stream {}: only effective with use_shared_mem=true",
+                     pixelFormatName(pixel_format_), stream_id_);
+        pixel_format_ = static_cast<uint32_t>(PixelFormat::BGR);
+    }
+
+    // 必须在 decoder_->open() 之前告知期望的原始帧格式：
+    // 解码器据此选择最优路径（CpuDecoder 用 sws 直出目标格式；CudaDecoder 让 NVDEC 直出 NV12）
+    if (decoder_)
+    {
+        decoder_->setOutputPixelFormat(pixel_format_);
+    }
 #ifndef RTSP_ENABLE_CUDA
     // CUDA 未启用时，强制关闭 GPU 编码器，并把请求的 GPU 解码器类型修正为 CPU
     if (use_gpu_encoder_)
@@ -145,7 +161,8 @@ StreamTask::StreamTask(const std::string &url,
     {
         // SHM 延迟到首次解码成功后创建，因为那时才知道实际帧分辨率
         // 每个流独立分配，互不影响
-        spdlog::info("SharedMemory requested for stream: {} (will init after first frame)", stream_id_);
+        spdlog::info("SharedMemory requested for stream: {} (will init after first frame, pixel_format={})",
+                     stream_id_, pixelFormatName(pixel_format_));
     }
 }
 
@@ -714,9 +731,8 @@ void StreamTask::stepIO()
 // 客户端会一直读到冻结的最后一帧，必须由客户端自行检测（文件 dev/ino/大小变化）并重连：
 //   - Python: client/remote_capture.py::_ShmReader._maybe_reconnect()
 //   - C++   : tools/save_frames.cpp::ShmReader::refreshIfStale()
-void StreamTask::ensureShmChannel(const cv::Mat &frame)
+void StreamTask::ensureShmChannel(size_t frame_bytes, int width, int height, int channels)
 {
-    const size_t frame_bytes = frame.total() * frame.elemSize();
     if (shm_channel_ && frame_bytes <= shm_channel_->maxFrameBytes())
     {
         return; // 现有容量够用
@@ -736,8 +752,8 @@ void StreamTask::ensureShmChannel(const cv::Mat &frame)
     try
     {
         shm_channel_ = std::make_unique<ZeroCopyChannel>(stream_id_, 0, capacity);
-        spdlog::info("SharedMemory ready for stream: {} ({}x{}x{}, {} bytes/frame, capacity {} bytes/slot)",
-                     stream_id_, frame.cols, frame.rows, frame.channels(), frame_bytes, capacity);
+        spdlog::info("SharedMemory ready for stream: {} ({}x{}x{}, fmt={}, {} bytes/frame, capacity {} bytes/slot)",
+                     stream_id_, width, height, channels, pixelFormatName(pixel_format_), frame_bytes, capacity);
     }
     catch (const std::exception &e)
     {
@@ -784,11 +800,13 @@ void StreamTask::stepCompute()
     // 所以下面在这些耗时操作前就释放锁——IO 线程的 grab() 也要这把锁，持锁做重活会把
     // 编码耗时串进取流循环，使取流速度低于源帧率，接收缓冲持续堆积（延迟越来越高）。
     //
-    // === 分支 1: 共享内存模式 -> 直接传原始 Mat ===
+    // === 分支 1: 共享内存模式 -> 直接传原始 Mat / 原始 YUV ===
     if (use_shared_mem_)
     {
         auto t_sws = std::chrono::steady_clock::now();
-        bool retrieved = decoder_->retrieve(reusable_frame_, true) && !reusable_frame_.empty();
+        // retrieveRaw 支持全部像素格式：BGR 与旧行为完全一致，YUV 则优先走解码器原生输出
+        // （CpuDecoder 用 sws 直出目标格式；CudaDecoder 让 NVDEC 直出 NV12，跳过色彩核）
+        bool retrieved = decoder_->retrieveRaw(reusable_raw_frame_, pixel_format_) && !reusable_raw_frame_.empty();
         frame_corrupted = decoder_->lastFrameCorrupted(); // 拿锁内快照，避免被下一次 grab 覆盖
         // 自测开关（RTSP_FAKE_GLITCH=1）：每 100 个发布帧伪造一次花屏，
         // 用于在没有真实坏流的情况下验证「逐帧标记 → gRPC/SHM → 客户端/Web」全链路
@@ -803,11 +821,20 @@ void StreamTask::stepCompute()
         if (retrieved)
         {
             auto t_pub = std::chrono::steady_clock::now();
+            const RawFrame &rf = reusable_raw_frame_;
+            const size_t frame_bytes = rf.buffer.total() * rf.buffer.elemSize();
+
             // 首次解码成功后按实际帧大小创建 SHM；后续帧变大（如分辨率切换）时自动扩容重建
-            ensureShmChannel(reusable_frame_);
+            ensureShmChannel(frame_bytes, rf.width, rf.height, rf.buffer.channels());
 
             const uint32_t flags = frame_corrupted ? SHM_FRAME_FLAG_CORRUPTED : 0u;
-            if (shm_channel_ && shm_channel_->write_frame_mat(reusable_frame_, last_grab_timestamp_ms_, flags))
+            if (shm_channel_ && shm_channel_->write_frame_raw(rf.buffer.data, frame_bytes,
+                                                             static_cast<uint64_t>(rf.width),
+                                                             static_cast<uint64_t>(rf.height),
+                                                             static_cast<uint32_t>(rf.buffer.channels()),
+                                                             static_cast<uint32_t>(rf.buffer.depth()),
+                                                             rf.step, rf.pixel_format,
+                                                             last_grab_timestamp_ms_, flags))
             {
                 frame_ready = true;
                 prof_frames_.fetch_add(1, std::memory_order_relaxed);
@@ -1261,6 +1288,12 @@ void StreamTask::switchDecoder(int decoder_type,
 
     pending_decoder_ = std::move(decoder);
     pending_decoder_type_ = decoder_type;
+
+    // 新解码器同样要在 open() 之前知道期望的原始帧格式，否则 YUV 流切换后会退回 BGR 路径
+    if (pending_decoder_)
+    {
+        pending_decoder_->setOutputPixelFormat(pixel_format_);
+    }
 
 #ifndef RTSP_ENABLE_CUDA
     // CUDA 未启用时禁止切换到 GPU 路径
