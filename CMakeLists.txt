@@ -5,6 +5,11 @@ cmake_minimum_required(VERSION 3.18)
 #   OFF      : 完全排除 CUDA 相关源文件与依赖，仅编译 CPU 路径
 option(ENABLE_CUDA "Enable CUDA GPU decoder/encoder support (NVCUVID/NVJPEG)" ON)
 
+# 通过编译选项控制是否启用海康 SDK 解码链路
+#   ON  (默认): 查找并编译海康 SDK（hik.cpp / hik_decoder.cpp），支持 DECODER_HIK_SDK
+#   OFF      : 完全排除海康 SDK 相关源文件与依赖，DECODER_HIK_SDK 回退到 CPU 解码
+option(ENABLE_HIK_SDK "Enable Hikvision SDK decoder support (DECODER_HIK_SDK)" ON)
+
 set(CMAKE_CXX_STANDARD 17)
 
 if(ENABLE_CUDA)
@@ -91,7 +96,9 @@ set(HIKVISION_SDK_INCLUDE_DIR "${HIKVISION_SDK_ROOT}/hik_header")
 set(HIKVISION_SDK_LIB_DIR "${HIKVISION_SDK_ROOT}/hik_libs")
 
 set(HIKVISION_LIBRARIES "")
-if(EXISTS "${HIKVISION_SDK_INCLUDE_DIR}/HCNetSDK.h")
+if(NOT ENABLE_HIK_SDK)
+    message(STATUS "Hikvision SDK support disabled by ENABLE_HIK_SDK=OFF; DECODER_HIK_SDK will fall back to CPU decoder")
+elseif(EXISTS "${HIKVISION_SDK_INCLUDE_DIR}/HCNetSDK.h")
     message(STATUS "Found Hikvision SDK include: ${HIKVISION_SDK_INCLUDE_DIR}")
     foreach(lib_name hcnetsdk HCCore hpr)
         find_library(HIK_${lib_name}_LIB
@@ -153,7 +160,7 @@ if(ENABLE_CUDA)
     )
 endif()
 
-if(EXISTS "${HIKVISION_SDK_INCLUDE_DIR}/HCNetSDK.h")
+if(ENABLE_HIK_SDK AND EXISTS "${HIKVISION_SDK_INCLUDE_DIR}/HCNetSDK.h")
     include_directories("${HIKVISION_SDK_INCLUDE_DIR}")
 endif()
 
@@ -186,15 +193,15 @@ if(ENABLE_CUDA)
     add_compile_definitions(RTSP_ENABLE_CUDA)
 endif()
 
-# 海康 SDK 源文件仅在找到 SDK 时编译
-if(HIKVISION_LIBRARIES)
+# 海康 SDK 源文件仅在启用开关且找到 SDK 时编译
+if(ENABLE_HIK_SDK AND HIKVISION_LIBRARIES)
     list(APPEND SRC_FILES
         src/hik.cpp              # 海康 SDK 封装
         src/hik_decoder.cpp      # 海康 SDK 解码器适配
     )
     add_compile_definitions(HAS_HIKVISION_SDK)
     message(STATUS "Hikvision SDK found, HIK_SDK decoder enabled")
-else()
+elseif(ENABLE_HIK_SDK)
     message(WARNING "Hikvision SDK libraries not found, HIK_SDK decoder disabled. Place SDK headers in ${HIKVISION_SDK_INCLUDE_DIR} and libraries in ${HIKVISION_SDK_LIB_DIR}, or use -DHIKVISION_SDK_ROOT=/path/to/sdk")
 endif()
 
@@ -215,7 +222,7 @@ if(ENABLE_CUDA)
 endif()
 
 # 若链接了海康 SDK，把 SDK 库目录加入运行时搜索路径
-if(HIKVISION_LIBRARIES)
+if(ENABLE_HIK_SDK AND HIKVISION_LIBRARIES)
     set_target_properties(rtsp_server PROPERTIES
         BUILD_RPATH_USE_ORIGIN ON
         BUILD_RPATH "${HIKVISION_SDK_LIB_DIR};${HIKVISION_SDK_LIB_DIR}/HCNetSDKCom"

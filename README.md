@@ -35,6 +35,18 @@ cmake .. && make -j
 ./rtsp_server
 ```
 
+#### 可选编译开关
+| 开关 | 默认 | 说明 |
+|------|------|------|
+| `-DENABLE_CUDA=OFF` | ON | 排除 NVCUVID/NVJPEG 相关代码，无需 CUDA Toolkit；`DECODER_GPU_NVCUVID` 回退为 CPU |
+| `-DENABLE_HIK_SDK=OFF` | ON | 排除海康 SDK 相关代码（`hik.cpp` / `hik_decoder.cpp`），无需 `sdk/hikvision`；`DECODER_HIK_SDK` 回退为 CPU |
+
+```bash
+# 不依赖 CUDA 与海康 SDK 的最小构建
+cmake -DENABLE_CUDA=OFF -DENABLE_HIK_SDK=OFF ..
+make -j
+```
+
 ### 生成 Python Proto
 ```bash
 cd client

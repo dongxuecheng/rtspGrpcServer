@@ -142,6 +142,18 @@ make -j
 ./rtsp_server [address:port]
 ```
 
+### 禁用海康 SDK
+
+通过 `-DENABLE_HIK_SDK=OFF`（默认 ON）可在编译期完全排除海康 SDK 链路：不查找 SDK、不编译 `src/hik.cpp` / `src/hik_decoder.cpp`、不定义 `HAS_HIKVISION_SDK`，链接时也不再需要 `libhcnetsdk` 等库。此时 `DECODER_HIK_SDK` 会按 `DecoderFactory` 的既有逻辑回退到 CPU 解码（`src/hik_url_parser.cpp` 无 SDK 依赖，仍会编译，`hik://` URL 仍能被识别）。
+
+```bash
+mkdir build-nohik && cd build-nohik
+cmake -DENABLE_HIK_SDK=OFF ..
+make -j
+```
+
+两个开关可组合使用，例如 `-DENABLE_CUDA=OFF -DENABLE_HIK_SDK=OFF`。
+
 ### 依赖项（开发环境）
 
 - C++17 编译器、CMake 3.18+
@@ -344,7 +356,7 @@ python example.py [编号]      # 编号 1-10，或 all 顺序运行全部
 - **客户端 keepalive 参数**：`client/remote_capture.py::_DEFAULT_CHANNEL_OPTIONS` **不能**开启 `keepalive_permit_without_calls`（或把 `keepalive_time_ms` 设得很小）。服务端用 gRPC 默认 ping 防洪策略（`min_recv_ping_interval_without_data=300s`、`max_ping_strikes=2`），空闲连接上频繁的 keepalive ping 会被 GOAWAY(`ENHANCE_YOUR_CALM "too many pings"`) 断开，表现为“空闲一会儿后 RPC 突然报 Too many pings”。另外 `connect()` 默认会等待 channel ready（3s），地址不可达时直接返回 False 并打印可操作提示，不再“假连接成功”。
 - **Web 控制台**：`web/server.py` 是 FastAPI BFF（REST + MJPEG），复用 `client/remote_capture.py`。服务端在 SHM 模式下不产出 JPEG，所以 SHM 流的预览由后端读共享内存再编码 JPEG，**要求后端与服务端同机**；跨机时只能用 gRPC JPEG 模式的流。控制类请求共用一个长连接（避免连接抖动），每个 MJPEG 预览会话用独立客户端。Web 端**不做鉴权**，默认监听 `0.0.0.0:8080`（`WEB_HOST`/`WEB_PORT` 可改）。
 - **信号量必须先于 SHM 创建**：`ZeroCopyChannel` 构造函数中 `sem_open` 在 `shm_open` **之前**执行。因为 `shm_open(O_CREAT)` 会让 SHM 文件立刻对客户端可见，客户端一看到文件就会 `sem_open`；若信号量晚于 SHM 出现，客户端会因 ENOENT 退化到轮询模式（客户端另有 `_ShmReader._try_attach_notify_sem()` 做惰性重试与自动升级作为兜底）。
-- **海康 SDK 放置**：`CMakeLists.txt` 默认在 `${CMAKE_SOURCE_DIR}/sdk/hikvision` 下查找 SDK 头文件（`hik_header/HCNetSDK.h`）和库文件（`hik_libs/libhcnetsdk.so` 等）。可通过 `-DHIKVISION_SDK_ROOT=/path/to/sdk` 指定其他路径；若未找到，CMake 会警告，`src/hik.cpp` / `src/hik_decoder.cpp` 不会被编译，`DECODER_HIK_SDK` 将降级为 CPU 解码器并运行时报错。
+- **海康 SDK 放置**：`CMakeLists.txt` 默认在 `${CMAKE_SOURCE_DIR}/sdk/hikvision` 下查找 SDK 头文件（`hik_header/HCNetSDK.h`）和库文件（`hik_libs/libhcnetsdk.so` 等）。可通过 `-DHIKVISION_SDK_ROOT=/path/to/sdk` 指定其他路径；也可用 `-DENABLE_HIK_SDK=OFF` 直接关闭整条海康链路；若未找到，CMake 会警告，`src/hik.cpp` / `src/hik_decoder.cpp` 不会被编译，`DECODER_HIK_SDK` 将降级为 CPU 解码器并运行时报错。
 - **Docker 中的海康 SDK**：`Dockerfile` / `Dockerfile.cpu` 会把 `sdk/hikvision` 复制到镜像 `/opt/hikvision`，并通过 `LD_LIBRARY_PATH` 和 `ldconfig` 使其可被 `rtsp_server` 加载。`entrypoint.sh` 也做了兜底导出。
 - **CUDA 架构**：`CMakeLists.txt` 中硬编码了 `75 80 86 89` 四个架构，如需支持新 GPU 需要修改此处。
 - **线程池初始化**：`TaskScheduler` 在 `init()` 中为每个检测到的 GPU 直接创建线程池，避免懒加载带来的数据竞争问题。
