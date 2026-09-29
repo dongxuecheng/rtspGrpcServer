@@ -17,6 +17,42 @@
 #include <jemalloc/jemalloc.h>
 #endif
 
+namespace
+{
+    const char *decoderTypeName(int type)
+    {
+        switch (type)
+        {
+        case streamingservice::DECODER_CPU_FFMPEG:
+            return "CPU_FFMPEG";
+        case streamingservice::DECODER_GPU_NVCUVID:
+            return "GPU_NVCUVID";
+        case streamingservice::DECODER_HIK_SDK:
+            return "HIK_SDK";
+        default:
+            return "UNKNOWN";
+        }
+    }
+
+    // 解码器降级的原因（DecoderFactory 把请求的类型降成了 CPU_FFMPEG 时使用）
+    std::string decoderFallbackReason(streamingservice::DecoderType requested, int gpu_id)
+    {
+        switch (requested)
+        {
+        case streamingservice::DECODER_GPU_NVCUVID:
+#ifdef RTSP_ENABLE_CUDA
+            return "GPU " + std::to_string(gpu_id) + " 不可用（check_device_id 失败）";
+#else
+            return "服务端为 CPU-only 构建（-DENABLE_CUDA=OFF）";
+#endif
+        case streamingservice::DECODER_HIK_SDK:
+            return "服务端未编译海康 SDK（-DENABLE_HIK_SDK=OFF 或未找到 SDK）";
+        default:
+            return "服务端不支持该解码器";
+        }
+    }
+}
+
 RTSPServiceImpl::RTSPServiceImpl() : manager_running_(true)
 {
     // 启动时清理上一次运行遗留的孤儿 SHM，防止服务崩溃/重启后 /dev/shm 累积
@@ -82,66 +118,8 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
         spdlog::warn("[StartStream] heartbeat_timeout_ms too large, capped at {}", MAX_HEARTBEAT_MS);
     }
 
-    // 使用 url_to_id_ 实现 O(1) 的快速查找，替代原来的 O(N) 遍历
-    {
-        std::shared_lock<std::shared_mutex> lock(map_mutex_);
-        auto it = url_to_id_.find(effective_url);
-        if (it != url_to_id_.end())
-        {
-            std::string existing_id = it->second;
-            auto stream_it = streams_.find(existing_id);
-            if (stream_it != streams_.end())
-            {
-                stream_it->second->keepAlive();
-                spdlog::info("[REUSE] URL already exists. Returning ID: {}", existing_id);
-                response->set_success(true);
-                response->set_stream_id(existing_id);
-                response->set_message("Stream already exists, reusing existing task.");
-                return grpc::Status::OK;
-            }
-            else
-            {
-                // 防御性编程：如果 streams_ 中没有，但 url_to_id_ 中有，说明状态不一致，清理掉脏数据
-                lock.unlock();
-                std::lock_guard<std::shared_mutex> write_lock(map_mutex_);
-                url_to_id_.erase(it);
-            }
-        }
-    }
-
-    auto actual_decoder_type = use_hik_sdk ? streamingservice::DECODER_HIK_SDK : decoder_type;
-
-    std::string decode_type_str;
-    if (actual_decoder_type == streamingservice::DECODER_CPU_FFMPEG)
-        decode_type_str = "FFmpeg";
-    else if (actual_decoder_type == streamingservice::DECODER_GPU_NVCUVID)
-        decode_type_str = "GPU";
-    else if (actual_decoder_type == streamingservice::DECODER_HIK_SDK)
-        decode_type_str = "HIK_SDK";
-    else
-        decode_type_str = "UNKNOWN";
-    spdlog::info("Decoder type: {}, GPU ID: {}, Only key frames: {}", decode_type_str, gpu_id, only_key_frames ? "Yes" : "No");
-
-    // 耗时操作：在无锁状态下创建解码器和编码器
-    auto decoder = DecoderFactory::create(actual_decoder_type, gpu_id, only_key_frames);
-    if (!decoder)
-    {
-        response->set_success(false);
-        response->set_message("Failed to create requested decoder type");
-        return grpc::Status::OK;
-    }
-
-    const int jpeg_quality = 85;
-    bool use_gpu_encoder = (actual_decoder_type == streamingservice::DECODER_GPU_NVCUVID);
-    // 海康 SDK 抓图返回的已经是 JPEG，这里先用 CPU 编码器复用现有路径（后续可优化为直接透传）
-    if (actual_decoder_type == streamingservice::DECODER_HIK_SDK)
-        use_gpu_encoder = false;
-    spdlog::info("Using {} encoder", use_gpu_encoder ? "NVJPEG GPU" : "OpenCV CPU");
-
-    std::string stream_id = generate_uuid();
-    spdlog::info("Using Shared Memory: {}", request->use_shared_mem() ? "Enabled" : "Disabled");
-
     // 共享内存原始帧的像素格式：仅 SHM 通道生效（gRPC 始终返回 JPEG）。
+    // 放在复用检查之前算好，这样复用已有流时能把“请求 vs 实际”如实回报给客户端。
     // 默认 PIXEL_BGR 保持旧行为；未开启 SHM 时忽略并保持 BGR，避免客户端误以为拿到 YUV。
     uint32_t pixel_format = static_cast<uint32_t>(request->pixel_format());
     if (pixel_format != static_cast<uint32_t>(PixelFormat::BGR) &&
@@ -158,6 +136,108 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
                      pixelFormatName(pixel_format));
         pixel_format = static_cast<uint32_t>(PixelFormat::BGR);
     }
+
+    // 使用 url_to_id_ 实现 O(1) 的快速查找，替代原来的 O(N) 遍历
+    {
+        std::shared_lock<std::shared_mutex> lock(map_mutex_);
+        auto it = url_to_id_.find(effective_url);
+        if (it != url_to_id_.end())
+        {
+            std::string existing_id = it->second;
+            auto stream_it = streams_.find(existing_id);
+            if (stream_it != streams_.end())
+            {
+                const auto &existing = stream_it->second;
+                existing->keepAlive();
+                spdlog::info("[REUSE] URL already exists. Returning ID: {}", existing_id);
+
+                // 复用是刻意设计（单路解码、多客户端共享），但必须**如实告知**：
+                // 已有流的解码器/像素格式可能与本次请求不同，否则客户端会困惑于
+                // “我明明选了 NVCUVID / NV12，怎么列表里是 CPU / BGR”。
+                const int existing_decoder = existing->getDecoderType();
+                const uint32_t existing_pix = existing->getPixelFormat();
+                std::string msg = "Stream already exists, reusing existing task.";
+                msg += std::string(" 实际配置: decoder=") + decoderTypeName(existing_decoder) +
+                       ", pixel_format=" + pixelFormatName(existing_pix) + ".";
+
+                const bool decoder_differs = (static_cast<int>(use_hik_sdk ? streamingservice::DECODER_HIK_SDK : decoder_type) != existing_decoder);
+                const bool pix_differs = request->use_shared_mem() && (pixel_format != existing_pix);
+                if (decoder_differs || pix_differs)
+                {
+                    msg += " 本次请求的";
+                    if (decoder_differs)
+                    {
+                        msg += std::string("decoder=") + decoderTypeName(static_cast<int>(decoder_type));
+                    }
+                    if (decoder_differs && pix_differs)
+                    {
+                        msg += ",";
+                    }
+                    if (pix_differs)
+                    {
+                        msg += std::string("pixel_format=") + pixelFormatName(pixel_format);
+                    }
+                    msg += " 未生效（同一 URL 已存在流）；如需切换请先停止该流或改用其他 URL。";
+                    spdlog::warn("[REUSE] requested decoder={}/pixel_format={} differs from existing decoder={}/pixel_format={} for URL {}",
+                                 decoderTypeName(static_cast<int>(use_hik_sdk ? streamingservice::DECODER_HIK_SDK : decoder_type)),
+                                 pixelFormatName(pixel_format), decoderTypeName(existing_decoder),
+                                 pixelFormatName(existing_pix), effective_url);
+                }
+
+                response->set_success(true);
+                response->set_stream_id(existing_id);
+                response->set_message(msg);
+                return grpc::Status::OK;
+            }
+            else
+            {
+                // 防御性编程：如果 streams_ 中没有，但 url_to_id_ 中有，说明状态不一致，清理掉脏数据
+                lock.unlock();
+                std::lock_guard<std::shared_mutex> write_lock(map_mutex_);
+                url_to_id_.erase(it);
+            }
+        }
+    }
+
+    const auto requested_decoder_type = use_hik_sdk ? streamingservice::DECODER_HIK_SDK : decoder_type;
+
+    spdlog::info("Requested decoder type: {}, GPU ID: {}, Only key frames: {}",
+                 decoderTypeName(static_cast<int>(requested_decoder_type)), gpu_id, only_key_frames ? "Yes" : "No");
+
+    // 耗时操作：在无锁状态下创建解码器和编码器
+    // actual_decoder_type：实际生效的类型。请求的解码器因构建配置/硬件不可用而降级时，
+    // 这里会拿到 CPU_FFMPEG，并把它如实上报（否则会出现“选了 NVCUVID、列表显示 FFmpeg”的困惑）。
+    streamingservice::DecoderType actual_decoder_type = requested_decoder_type;
+    auto decoder = DecoderFactory::create(requested_decoder_type, gpu_id, only_key_frames, &actual_decoder_type);
+    if (!decoder)
+    {
+        response->set_success(false);
+        response->set_message("Failed to create requested decoder type");
+        return grpc::Status::OK;
+    }
+
+    // 降级说明：写进 StartResponse.message，任何客户端（Web/CLI/Python）都能直接看到原因
+    std::string decoder_note;
+    if (actual_decoder_type != requested_decoder_type)
+    {
+        decoder_note = std::string(" Note: requested decoder ") + decoderTypeName(static_cast<int>(requested_decoder_type)) +
+                       " is NOT effective, actually using " + decoderTypeName(static_cast<int>(actual_decoder_type)) +
+                       " (" + decoderFallbackReason(requested_decoder_type, gpu_id) + ")";
+        spdlog::warn("[StartStream] decoder downgraded: requested={} actual={} ({})",
+                     decoderTypeName(static_cast<int>(requested_decoder_type)),
+                     decoderTypeName(static_cast<int>(actual_decoder_type)),
+                     decoderFallbackReason(requested_decoder_type, gpu_id));
+    }
+
+    const int jpeg_quality = 85;
+    bool use_gpu_encoder = (actual_decoder_type == streamingservice::DECODER_GPU_NVCUVID);
+    // 海康 SDK 抓图返回的已经是 JPEG，这里先用 CPU 编码器复用现有路径（后续可优化为直接透传）
+    if (actual_decoder_type == streamingservice::DECODER_HIK_SDK)
+        use_gpu_encoder = false;
+    spdlog::info("Using {} encoder", use_gpu_encoder ? "NVJPEG GPU" : "OpenCV CPU");
+
+    std::string stream_id = generate_uuid();
+    spdlog::info("Using Shared Memory: {}", request->use_shared_mem() ? "Enabled" : "Disabled");
     if (request->use_shared_mem())
     {
         spdlog::info("[StartStream] SHM pixel format: {}", pixelFormatName(pixel_format));
@@ -207,8 +287,11 @@ grpc::Status RTSPServiceImpl::StartStream(grpc::ServerContext *context, const st
 
     response->set_success(true);
     response->set_stream_id(stream_id);
-    response->set_message("Stream started successfully");
-    spdlog::info("[START] New Stream ID: {} | URL: {}", stream_id, effective_url);
+    response->set_message("Stream started successfully" + decoder_note);
+    spdlog::info("[START] New Stream ID: {} | URL: {} | decoder={} | pixel_format={}",
+                 stream_id, effective_url, decoderTypeName(static_cast<int>(actual_decoder_type)),
+                 pixelFormatName(request->use_shared_mem() ? pixel_format
+                                                           : static_cast<uint32_t>(PixelFormat::BGR)));
     return grpc::Status::OK;
 }
 
@@ -665,17 +748,31 @@ grpc::Status RTSPServiceImpl::UpdateStream(grpc::ServerContext *context,
     if (target_decoder_type != task->getDecoderType())
     {
         spdlog::info("[UPDATE] Decoder type changed for stream {}: {} -> {}",
-                     stream_id, task->getDecoderType(), target_decoder_type);
+                     stream_id, decoderTypeName(task->getDecoderType()), decoderTypeName(target_decoder_type));
+        // 同样取回**实际**类型：目标解码器不可用时（CPU-only 构建 / GPU 不可用）会降级，
+        // 必须把降级后的类型交给 StreamTask，否则列表会显示一个并未真正使用的解码器。
+        streamingservice::DecoderType actual_target_type =
+            static_cast<streamingservice::DecoderType>(target_decoder_type);
         auto new_decoder = DecoderFactory::create(
             static_cast<streamingservice::DecoderType>(target_decoder_type),
-            target_gpu_id);
+            target_gpu_id,
+            task->onlyKeyFrames(),
+            &actual_target_type);
         if (!new_decoder)
         {
             response->set_success(false);
             response->set_message("Failed to create target decoder type");
             return grpc::Status::OK;
         }
-        task->switchDecoder(target_decoder_type,
+        if (static_cast<int>(actual_target_type) != target_decoder_type)
+        {
+            spdlog::warn("[UPDATE] decoder downgraded for stream {}: requested={} actual={} ({})",
+                         stream_id, decoderTypeName(target_decoder_type),
+                         decoderTypeName(static_cast<int>(actual_target_type)),
+                         decoderFallbackReason(static_cast<streamingservice::DecoderType>(target_decoder_type), target_gpu_id));
+            use_gpu_encoder = (actual_target_type == streamingservice::DECODER_GPU_NVCUVID);
+        }
+        task->switchDecoder(static_cast<int>(actual_target_type),
                             std::move(new_decoder),
                             effective_url,
                             use_gpu_encoder);

@@ -347,9 +347,36 @@ def api_start_stream(body: StartStreamBody):
             only_key_frames=body.only_key_frames,
             pixel_format=body.pixel_format,
         )
-    if not stream_id:
-        raise HTTPException(status_code=400, detail="创建任务失败（请检查 RTSP URL 与解码器类型）")
-    return {"stream_id": stream_id}
+        if not stream_id:
+            raise HTTPException(status_code=400, detail="创建任务失败（请检查 RTSP URL 与解码器类型）")
+
+        # 创建成功 ≠ 配置生效，必须把差异回报给前端，否则会出现
+        # “明明选了 NVCUVID，列表却显示 CPU (FFmpeg)”这种难以自查的困惑。两种常见情况：
+        #   1) 服务端把解码器降级：CPU-only 构建（ENABLE_CUDA=OFF）或 GPU 不可用
+        #   2) 同一 URL 已有流被复用（服务端设计如此：单路解码多客户端共享），
+        #      其解码器 / SHM 像素格式沿用原有流
+        warnings: List[str] = []
+        info = client.check_stream(stream_id) or {}
+        actual_decoder = int(info.get("decoder_type_raw", body.decoder_type))
+        if actual_decoder != body.decoder_type:
+            warnings.append(
+                f"请求的解码器「{DECODER_NAMES.get(body.decoder_type, body.decoder_type)}」未生效，"
+                f"实际使用「{DECODER_NAMES.get(actual_decoder, actual_decoder)}」"
+                f"（常见原因：服务端为 CPU-only 构建 ENABLE_CUDA=OFF，或 gpu_id 对应的 GPU 不可用）"
+            )
+        if body.use_shared_mem and not info.get("use_shared_mem"):
+            warnings.append("请求的『共享内存 (SHM)』未生效，实际走的是 gRPC JPEG")
+        if body.use_shared_mem:
+            actual_pix = int(info.get("pixel_format", PIXEL_BGR))
+            if actual_pix != body.pixel_format:
+                warnings.append(
+                    f"请求的原始帧格式「{PIXEL_FORMAT_NAMES.get(body.pixel_format, body.pixel_format)}」未生效，"
+                    f"实际「{PIXEL_FORMAT_NAMES.get(actual_pix, actual_pix)}」"
+                    f"（该 URL 已有流时会被复用，格式沿用原有流）"
+                )
+        for w in warnings:
+            logger.warning(f"[web] 创建流 {stream_id}: {w}")
+        return {"stream_id": stream_id, "warnings": warnings}
 
 
 @app.post("/api/streams/{stream_id}/stop")

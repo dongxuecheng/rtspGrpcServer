@@ -1002,6 +1002,12 @@ class _BaseRTSPClient:
 
             if resp.success:
                 logger.info(f"流启动成功: {resp.stream_id} -> {rtsp_url}")
+                # 服务端会在“解码器被降级（CPU-only 构建 / GPU 不可用）”或
+                # “复用了同 URL 的已有流（配置与本次请求不同）”时给出说明，
+                # 直接显示出来，避免出现“选了 NVCUVID 却在用 CPU”这类难自查的问题。
+                server_msg = getattr(resp, "message", "")
+                if server_msg and server_msg != "Stream started successfully":
+                    logger.warning(f"[RTSPClient] 服务端提示: {server_msg}")
                 return resp.stream_id
             else:
                 logger.error(f"流启动失败: {resp.message}")

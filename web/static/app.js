@@ -432,6 +432,9 @@ async function createStream(event) {
   try {
     const res = await api('/api/streams', { method: 'POST', body: JSON.stringify(body) });
     toast(`已创建：${res.stream_id}`, 'ok');
+    // 创建成功不代表配置生效：服务端可能降级解码器（CPU-only 构建 / GPU 不可用）
+    // 或复用了同 URL 的已有流（配置沿用原有流）。这类差异必须显式提示。
+    (res.warnings || []).forEach((w) => toast(`注意：${w}`, 'warn', 10000));
     await loadStreams();
     await loadHealth();
   } catch (e) {
