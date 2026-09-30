@@ -16,7 +16,7 @@ services:
       # 与 include 本文件的外部项目保持 namespace 一致，双方通过 /dev/shm/{stream_id} 交互。
       - /dev/shm/${SHM_NAMESPACE:-grpc_rtsp}:/dev/shm
       # 开发/调试：直接挂载本地编译好的二进制和入口脚本，避免每次修改都重建镜像
-      - ./workspace:/app/
+      # - ./workspace:/app/
     deploy:
       resources:
         reservations:
