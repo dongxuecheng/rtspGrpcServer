@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# 本地构建目录
+build
+build-cpu
+build-*
+cmake-build-*
+
+# 已编译的旧二进制
+rtsp_server
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+
+# IDE
+.vscode
+.idea
+
+# Logs
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+*~
+
+# workspace 中如果存放大量运行时数据，不参与镜像构建
+workspace
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,24 +1,75 @@
-# 纯 CPU 运行镜像（非 CUDA 基础镜像）
-# 用法：
-#   1. 先在宿主机编译 CPU-only 二进制：
-#        mkdir build-cpu && cd build-cpu
-#        cmake -DENABLE_CUDA=OFF ..
-#        make -j$(nproc)
-#   2. 将编译好的 rtsp_server 放到项目根目录（或修改下面的 COPY 路径）
-#        cp build-cpu/rtsp_server ./rtsp_server
-#   3. 构建镜像：
-#        docker build -f Dockerfile.cpu -t rtsp_server_cpu .
-#
-FROM ubuntu:22.04
+# syntax=docker/dockerfile:1
+
+# ============================================================
+# Stage 1: Builder
+# 在 Docker 内完成 CPU-only rtsp_server 编译
+# ============================================================
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 替换为阿里云镜像源（可选，加速下载）
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+# 国内环境使用阿里云 Ubuntu 镜像源
+RUN sed -i 's@http://archive.ubuntu.com@https://mirrors.aliyun.com@g' /etc/apt/sources.list && \
+    sed -i 's@http://security.ubuntu.com@https://mirrors.aliyun.com@g' /etc/apt/sources.list
 
-# 安装运行时所需的动态链接库
-RUN apt-get update && apt-get install -y \
+# 编译依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    pkg-config \
+    libopencv-dev \
+    libgrpc++-dev \
+    protobuf-compiler-grpc \
+    protobuf-compiler \
+    libprotobuf-dev \
+    libfmt-dev \
+    libspdlog-dev \
+    libturbojpeg0-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libjemalloc-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# 拷贝项目源码
+COPY . /src
+
+# CPU-only 编译
+# ENABLE_CUDA=OFF:
+#   不编译 CUDA / NVCUVID / NVJPEG
+#
+# ENABLE_HIK_SDK=OFF:
+#   不依赖海康 SDK，普通 RTSP 使用 FFmpeg CPU 解码
+RUN cmake -S /src -B /src/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_CUDA=OFF \
+        -DENABLE_HIK_SDK=OFF \
+    && cmake --build /src/build \
+        --target rtsp_server \
+        --parallel $(nproc)
+
+
+# ============================================================
+# Stage 2: Runtime
+# 最终运行镜像，不包含 gcc / cmake 等编译工具
+# ============================================================
+FROM ubuntu:22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN sed -i 's@http://archive.ubuntu.com@https://mirrors.aliyun.com@g' /etc/apt/sources.list && \
+    sed -i 's@http://security.ubuntu.com@https://mirrors.aliyun.com@g' /etc/apt/sources.list
+
+# 运行时动态库
+#
+# 这里暂时使用对应的 -dev 包，优点是 Ubuntu 22.04 下依赖最稳，
+# 避免漏掉某个动态库导致 rtsp_server 启动失败。
+# 后续如需要进一步压缩镜像，可以再精简为纯 runtime 包。
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dev \
     libgrpc++-dev \
     libprotobuf-dev \
@@ -30,22 +81,16 @@ RUN apt-get update && apt-get install -y \
     libavutil-dev \
     libswscale-dev \
     libjemalloc-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
 WORKDIR /app
 
-# 海康 SDK 运行时库（可选）
-# COPY sdk/hikvision /opt/hikvision
-# ENV LD_LIBRARY_PATH=/opt/hikvision/hik_libs:/opt/hikvision/hik_libs/HCNetSDKCom:${LD_LIBRARY_PATH}
-# RUN ldconfig /opt/hikvision/hik_libs /opt/hikvision/hik_libs/HCNetSDKCom
+# 只从 builder 中复制最终程序
+COPY --from=builder /src/build/rtsp_server /app/rtsp_server
 
-# 拷贝已编译好的 CPU-only 二进制
-# 请确保宿主机当前目录下存在 rtsp_server 文件
-# COPY rtsp_server /app/rtsp_server
+RUN chmod +x /app/rtsp_server
 
-# 暴露 gRPC 默认监听的 50051 端口
 EXPOSE 50051
 
-# 启动服务端
-CMD ["./rtsp_server"]
+CMD ["/app/rtsp_server"]
