@@ -36,9 +36,9 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 海康 SDK 运行时库（可选）
-# COPY sdk/hikvision /opt/hikvision
-# ENV LD_LIBRARY_PATH=/opt/hikvision/hik_libs:/opt/hikvision/hik_libs/HCNetSDKCom:${LD_LIBRARY_PATH}
-# RUN ldconfig /opt/hikvision/hik_libs /opt/hikvision/hik_libs/HCNetSDKCom
+COPY sdk/hikvision /opt/hikvision
+ENV LD_LIBRARY_PATH=/opt/hikvision/hik_libs:/opt/hikvision/hik_libs/HCNetSDKCom:${LD_LIBRARY_PATH}
+RUN ldconfig /opt/hikvision/hik_libs /opt/hikvision/hik_libs/HCNetSDKCom
 
 # 拷贝已编译好的 CPU-only 二进制
 # 请确保宿主机当前目录下存在 rtsp_server 文件
